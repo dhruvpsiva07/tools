@@ -1,0 +1,1533 @@
+<title>Fork Machine</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;800;900&family=JetBrains+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-screen canvas where the tree of possibility grows downward, each act repainting the void behind it; a glass HUD frames it: stats + inventory left, causal log right, live fork at the bottom. Deliberately single dark theme: a machine in the void. */
+:root {
+  --bg: #06070c;
+  --panel: rgba(13, 16, 26, 0.84);
+  --panel-solid: #0e111b;
+  --line: #262c42;
+  --ink: #e9edf6;
+  --muted: #8a93ad;
+  --yes: #4fe3a1;
+  --no: #ff5d6c;
+  --rare: #ff5dd2;
+  --act: #ffb547;
+  --f-display: "Unbounded", "Arial Black", Impact, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45; }
+canvas#world { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+canvas#world.dragging { cursor: grabbing; }
+.scan { position: fixed; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 3px); mix-blend-mode: overlay; }
+.vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55)); }
+
+.hud {
+  position: fixed; inset: 0; pointer-events: none;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: calc(env(safe-area-inset-top, 0px) + 12px) calc(env(safe-area-inset-bottom, 0px) + 12px);
+  display: grid; gap: 12px;
+  grid-template-columns: 248px minmax(0, 1fr) 300px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "top top top" "stats . log" "stats panel log";
+}
+.hud > * { pointer-events: auto; }
+.glass { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+
+.top { grid-area: top; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; }
+.brand { font-family: var(--f-display); font-weight: 900; font-size: 18px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.brand em { font-style: normal; color: var(--act); transition: color .6s; }
+.top form { display: flex; gap: 8px; flex: 1; min-width: 0; flex-wrap: wrap; align-items: center; }
+.top input[type=text] { flex: 1 1 240px; min-width: 0; }
+input, select, button { font: inherit; color: var(--ink); }
+input[type=text], select { background: #0a0c14; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+button { cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: #141828; padding: 8px 12px; }
+button:hover { border-color: var(--muted); }
+button.run { background: var(--act); color: #0a0a10; border: 0; font-family: var(--f-display); font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 9px 18px; transition: background .6s; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--act); outline-offset: 2px; }
+.logbtn { display: none; }
+
+.stats { grid-area: stats; padding: 14px; display: flex; flex-direction: column; gap: 13px; overflow: auto; align-self: start; max-height: 100%; }
+.lbl { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; }
+.oddsval { font-family: var(--f-display); font-weight: 800; font-size: 22px; line-height: 1.15; margin-top: 4px; font-variant-numeric: tabular-nums; word-break: break-word; }
+.oddsval sup { font-size: .6em; }
+.oddsnote { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.oddsnote b { color: var(--ink); font-weight: 500; }
+.bar { height: 8px; border-radius: 4px; background: #181d2e; position: relative; margin-top: 6px; overflow: hidden; }
+.bar.bip { background: linear-gradient(90deg, color-mix(in srgb, var(--no) 45%, #181d2e), #181d2e 50%, color-mix(in srgb, var(--yes) 45%, #181d2e)); overflow: visible; }
+.bar.bip i { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--ink); left: 50%; transform: translateX(-50%); box-shadow: 0 0 8px var(--ink); transition: left .35s; }
+.bar b { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, var(--act), var(--rare)); transition: width .35s; }
+.meterval { font-family: var(--f-mono); font-size: 12px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.inv { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.inv .empty { font-size: 12px; color: var(--muted); }
+.item { font-family: var(--f-mono); font-size: 10.5px; padding: 3px 7px; border-radius: 5px; background: #1b1530; color: #d9c6ff; border: 1px solid #3b2c66; }
+.item.new { animation: itempop .7s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes itempop { from { transform: scale(2.2); background: #ffd36b; color: #1a1200; } to { transform: none; } }
+.counts { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; margin: 0; font-size: 12.5px; }
+.counts dt { color: var(--muted); }
+.counts dd { margin: 0; font-family: var(--f-mono); text-align: right; font-variant-numeric: tabular-nums; }
+
+.log { grid-area: log; display: flex; flex-direction: column; min-height: 0; }
+.log h3 { margin: 0; padding: 12px 14px 8px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
+.log ol { list-style: none; margin: 0; padding: 0 10px 12px; overflow: auto; flex: 1; min-height: 0; font-size: 12.5px; }
+.log li { padding: 5px 6px; border-bottom: 1px solid #1a1f30; }
+.log li .n { font-family: var(--f-mono); color: var(--muted); font-size: 10.5px; margin-right: 4px; }
+.log li .p { font-family: var(--f-mono); color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.log li.rare { background: color-mix(in srgb, var(--rare) 12%, transparent); border-radius: 6px; }
+.log li.rare .p { color: #ff8ee0; }
+.log li.sys { font-family: var(--f-mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--act); }
+.log li.split { color: #7cc8ff; } .log li.collapse { color: var(--no); } .log li.loop { color: #ffd36b; } .log li.portal { color: #c39bff; }
+.log li.twist { color: #ff9a3d; } .log li.snap { color: #c8a96a; } .log li.retcon { color: #ffd36b; } .log li.itm { color: #d9c6ff; } .log li.boss { color: #ff6b7a; } .log li.ach { color: #ffe27a; }
+.log li.verdict-yes { color: var(--yes); font-weight: 600; } .log li.verdict-no { color: var(--no); font-weight: 600; }
+.log .tl { font-family: var(--f-mono); font-size: 10px; padding: 0 4px; border-radius: 3px; background: #1d2a40; color: #7cc8ff; margin-right: 4px; }
+
+.panel { grid-area: panel; justify-self: center; width: 100%; max-width: 620px; padding: 14px 16px 16px; max-height: 52vh; overflow: auto; }
+.pmeta { display: flex; justify-content: space-between; gap: 10px; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.pmeta .actname { color: var(--act); transition: color .6s; }
+.panel h2 { font-size: 19px; font-weight: 600; margin: 6px 0 12px; min-height: 1.4em; text-wrap: balance; }
+.panel .btitle { margin: -6px 0 12px; color: var(--muted); font-style: italic; }
+.banner { font-family: var(--f-display); font-weight: 800; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; padding: 6px 10px; border-radius: 6px; margin-bottom: 10px; display: inline-block; }
+.banner.loop { background: #3a2c08; color: #ffd36b; } .banner.split { background: #0c2a44; color: #7cc8ff; } .banner.collapse { background: #3d1016; color: #ff8a95; } .banner.portal { background: #2a1748; color: #c9a6ff; } .banner.conseq { background: #1d2333; color: var(--act); }
+.banner.twist { background: #3d2208; color: #ffb36b; } .banner.snap { background: #2f2616; color: #e6cc95; } .banner.retcon { background: #3a2c08; color: #ffd36b; } .banner.boss { background: #3d0a12; color: #ff8a95; }
+.stripwrap { position: relative; margin: 6px 0 12px; padding-top: 12px; }
+.slabel { font-family: var(--f-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #7cc8ff; margin-bottom: 2px; }
+.strip { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); background: #0a0c14; }
+.seg { height: 100%; min-width: 2px; border-right: 1px solid #06070c; transition: filter .08s, background .2s; }
+.seg:last-child { border-right: 0; }
+.seg.a { background: color-mix(in srgb, var(--act) 42%, #0a0c14); }
+.seg.b { background: color-mix(in srgb, var(--act) 20%, #0a0c14); }
+.seg.r { background: repeating-linear-gradient(45deg, var(--rare) 0 3px, #5a1c50 3px 6px); }
+.seg.hot { filter: brightness(1.9); }
+.seg.won { background: var(--act); filter: none; box-shadow: inset 0 0 0 2px #fff; }
+.seg.won.r { background: var(--rare); }
+.cursor { position: absolute; top: 0; left: 0; width: 2px; height: 42px; background: #fff; transform: translateX(-1px); box-shadow: 0 0 10px #fff; border-radius: 1px; }
+.cursor::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid #fff; border-bottom: 0; }
+.opts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.opts li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; transition: opacity .3s, border-color .3s, background .3s; }
+.opts li .ol { min-width: 0; }
+.opts li .op { font-family: var(--f-mono); font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.opts li .chips { grid-column: 1 / -1; display: flex; gap: 5px; flex-wrap: wrap; }
+.chip { font-family: var(--f-mono); font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: #181d2e; color: var(--muted); }
+.chip.y { color: var(--yes); } .chip.n { color: var(--no); } .chip.c { color: #ffb0ea; } .chip.s { color: #7cc8ff; background: #10223a; } .chip.i { color: #d9c6ff; background: #1b1530; }
+.chip.rare { color: #ff8ee0; background: #3a1236; }
+.opts li.won { border-color: var(--act); background: color-mix(in srgb, var(--act) 12%, transparent); }
+.opts li.lost { opacity: .35; }
+.opts li .mk { font-family: var(--f-mono); font-size: 10px; color: #7cc8ff; margin-left: 6px; }
+
+/* boss */
+.hp { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.hprow { display: grid; grid-template-columns: 74px minmax(0, 1fr) 70px; gap: 10px; align-items: center; font-family: var(--f-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.hprow span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.hpbar { height: 14px; border-radius: 4px; background: #1a0f14; border: 1px solid var(--line); overflow: hidden; position: relative; }
+.hpbar b { position: absolute; inset: 0 auto 0 0; width: 100%; transition: width .35s cubic-bezier(.2, 1, .3, 1); }
+.hpbar i { position: absolute; inset: 0 auto 0 0; width: 100%; background: #fff6; transition: width .9s .25s; }
+.hpbar.you b { background: linear-gradient(90deg, #2bb07a, var(--yes)); }
+.hpbar.boss b { background: linear-gradient(90deg, #c4243a, var(--no)); }
+.moveline { font-family: var(--f-display); font-weight: 800; font-size: 15px; min-height: 2.6em; line-height: 1.3; }
+.moveline .who-you { color: var(--yes); } .moveline .who-boss { color: var(--no); }
+.moveline .crit { color: #ffe27a; } .moveline small { font-family: var(--f-mono); font-weight: 400; font-size: 11px; color: var(--muted); display: block; }
+
+.coinstage { perspective: 800px; height: 150px; display: grid; place-items: center; margin: 8px 0; }
+.coin { width: 120px; height: 120px; position: relative; transform-style: preserve-3d; }
+.coin .face { position: absolute; inset: 0; border-radius: 50%; display: grid; place-items: center; font-family: var(--f-display); font-weight: 900; font-size: 30px; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.coin .fy { background: radial-gradient(circle at 35% 30%, #b6ffe0, var(--yes) 55%, #1d7a55); color: #062417; box-shadow: inset 0 0 0 6px #ffffff40; }
+.coin .fn { background: radial-gradient(circle at 35% 30%, #ffc3c9, var(--no) 55%, #8a1f2b); color: #2a0509; transform: rotateY(180deg); box-shadow: inset 0 0 0 6px #ffffff40; }
+.minicoins { display: flex; gap: 10px; justify-content: center; margin-top: 4px; }
+.minicoins span { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; font-family: var(--f-display); font-weight: 800; font-size: 11px; }
+.minicoins span.y { background: var(--yes); color: #062417; } .minicoins span.n { background: var(--no); color: #2a0509; }
+.pyes { font-family: var(--f-mono); font-size: 12px; color: var(--muted); text-align: center; }
+
+/* overlays */
+.actcard { position: fixed; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; opacity: 0; transition: opacity .35s; padding: 0 16px; }
+.actcard.show { opacity: 1; }
+.actcard .num { font-family: var(--f-mono); letter-spacing: .4em; font-size: 13px; color: var(--muted); text-transform: uppercase; }
+.actcard .nm { font-family: var(--f-display); font-weight: 900; font-size: clamp(34px, 8.5vw, 96px); line-height: 1; color: var(--act); text-shadow: 0 0 40px color-mix(in srgb, var(--act) 60%, transparent), 3px 0 0 #ff2a6d80, -3px 0 0 #2ad4ff80; text-transform: uppercase; text-wrap: balance; }
+.actcard .sub { color: var(--muted); margin-top: 8px; }
+.actcard.show .nm { animation: slam .7s cubic-bezier(.2, 1.5, .4, 1) both; }
+@keyframes slam { from { transform: scale(1.8); letter-spacing: .3em; opacity: 0; filter: blur(8px); } to { transform: none; letter-spacing: 0; opacity: 1; filter: none; } }
+.flash { position: fixed; inset: 0; pointer-events: none; background: var(--act); opacity: 0; mix-blend-mode: screen; }
+.flash.go { animation: flash .5s ease-out; }
+@keyframes flash { from { opacity: .45; } to { opacity: 0; } }
+.pop { position: fixed; left: 50%; top: 38%; transform: translate(-50%, -50%); pointer-events: none; font-family: var(--f-display); font-weight: 900; font-size: clamp(30px, 7vw, 72px); white-space: nowrap; text-transform: uppercase; opacity: 0; text-shadow: 0 0 30px currentColor, 4px 0 0 #ff2a6d90, -4px 0 0 #2ad4ff90; }
+.toasts { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 76px); display: flex; flex-direction: column; gap: 8px; pointer-events: none; z-index: 6; width: 290px; max-width: calc(100% - 32px); }
+.toast { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; align-items: center; padding: 9px 12px; border-radius: 10px; background: #12101e; border: 1px solid #4a3a1a; box-shadow: 0 10px 30px #0008; animation: tin .45s cubic-bezier(.2, 1.4, .4, 1) both; }
+.toast.out { animation: tout .4s ease-in both; }
+.toast .ic { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-family: var(--f-display); font-weight: 900; font-size: 13px; background: #ffd36b; color: #241700; }
+.toast.item { border-color: #3b2c66; } .toast.item .ic { background: #b48cff; color: #170a33; }
+.toast.boss { border-color: #5a1620; } .toast.boss .ic { background: var(--no); color: #2a0509; }
+.toast small { display: block; font-family: var(--f-mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.toast b { display: block; font-size: 14px; }
+.toast span { display: block; font-size: 12px; color: var(--muted); }
+@keyframes tin { from { transform: translateX(120%); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes tout { to { transform: translateX(120%); opacity: 0; } }
+.vhs { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; background: repeating-linear-gradient(0deg, rgba(255,255,255,.07) 0 2px, transparent 2px 5px); }
+.vhs.on { opacity: 1; animation: vhsjit .12s steps(2) infinite; }
+.vhs div { position: absolute; left: max(24px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 80px); font-family: var(--f-mono); font-weight: 600; font-size: clamp(22px, 4vw, 40px); color: #fff; text-shadow: 3px 0 #ff2a6d, -3px 0 #2ad4ff; }
+@keyframes vhsjit { 50% { transform: translateY(2px); } }
+body.glitch .hud { animation: glitch .5s steps(3) both; }
+body.glitch #world { filter: drop-shadow(4px 0 0 #ff2a6d) drop-shadow(-4px 0 0 #2ad4ff); }
+@keyframes glitch {
+  0% { transform: translate(3px, -2px); filter: hue-rotate(80deg) saturate(2); }
+  33% { transform: translate(-4px, 2px); filter: hue-rotate(-60deg); }
+  66% { transform: translate(2px, 1px); filter: invert(.15); }
+  100% { transform: none; filter: none; }
+}
+body.twist #world, body.twist .hud { animation: twist 1.6s cubic-bezier(.6, 0, .3, 1) both; }
+@keyframes twist { 0% { transform: none; } 40%, 60% { transform: rotate(180deg) scale(.85); } 100% { transform: none; } }
+
+.verdict { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; pointer-events: none;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+.vcard { pointer-events: auto; width: 100%; max-width: 660px; padding: 16px 18px; max-height: 54vh; overflow: auto; animation: rise .6s cubic-bezier(.2, 1.2, .4, 1) both; }
+@keyframes rise { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.vcard .vq { font-weight: 600; font-size: 16px; }
+.vcard .vword { font-family: var(--f-display); font-weight: 900; font-size: 15px; letter-spacing: .1em; }
+.vcard .vword.y { color: var(--yes); } .vcard .vword.n { color: var(--no); }
+.vcard .rarer { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.vcard .rarer b { color: var(--ink); font-weight: 500; }
+.vgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 12px 0; }
+.vgrid div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.vgrid b { display: block; font-family: var(--f-display); font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums; word-break: break-word; }
+.vgrid b sup { font-size: .6em; }
+.vcard h4 { margin: 10px 0 6px; font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.vcard ol { margin: 0; padding-left: 20px; font-size: 13px; }
+.vcard ol li { margin: 3px 0; }
+.vcard ol li .p { font-family: var(--f-mono); color: #ff8ee0; font-size: 11px; }
+.achs { display: flex; flex-wrap: wrap; gap: 5px; }
+.achs span { font-family: var(--f-mono); font-size: 10.5px; padding: 2px 7px; border-radius: 5px; background: #2a2208; color: #ffe27a; border: 1px solid #4a3a1a; }
+.achs span.it { background: #1b1530; color: #d9c6ff; border-color: #3b2c66; }
+.vbtns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.sample { font-family: var(--f-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--act); }
+.reopen { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (max-width: 900px) {
+  .hud { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-areas: "top" "stats" "." "panel"; gap: 8px; }
+  .stats { flex-direction: row; flex-wrap: wrap; gap: 10px 16px; padding: 10px 12px; }
+  .stats > * { flex: 1 1 140px; min-width: 0; }
+  .stats .counts, .stats .invwrap { display: none; }
+  .oddsval { font-size: 17px; }
+  .oddsnote { display: none; }
+  .logbtn { display: inline-block; }
+  .log { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); top: calc(env(safe-area-inset-top, 0px) + 70px); bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); z-index: 5; display: none; background: var(--panel-solid); }
+  .log.open { display: flex; }
+  .panel { max-height: 44vh; }
+  .panel h2 { font-size: 16px; }
+  .brand { font-size: 15px; }
+  .toasts { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 45vh); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .actcard.show .nm, .vcard, body.glitch .hud, .flash.go, body.twist #world, body.twist .hud, .toast, .item.new { animation: none; }
+}
+</style>
+
+<canvas id="world" aria-hidden="true"></canvas>
+<div class="scan"></div>
+<div class="vignette"></div>
+
+<div class="hud">
+  <div class="top glass">
+    <div class="brand">Fork <em>Machine</em></div>
+    <form id="form">
+      <label class="sr" for="question">Your yes/no question</label>
+      <input type="text" id="question" value="Should I start a new side project this weekend?" maxlength="140">
+      <label class="sr" for="speed">Speed</label>
+      <select id="speed">
+        <option value="1.4">Dramatic</option>
+        <option value="1" selected>Normal</option>
+        <option value="0.5">Fast</option>
+        <option value="0.15">Hyperdrive</option>
+      </select>
+      <button class="run" id="run" type="submit">Run</button>
+      <button type="button" id="skip" disabled>Skip to verdict</button>
+      <button type="button" class="logbtn" id="logbtn">Log</button>
+    </form>
+  </div>
+
+  <aside class="stats glass" aria-label="Machine state">
+    <div>
+      <div class="lbl"><span>Odds of this exact history</span></div>
+      <div class="oddsval" id="oddsVal">1 in 1</div>
+      <div class="oddsnote" id="oddsNote">Nothing has happened yet.</div>
+    </div>
+    <div>
+      <div class="lbl"><span>Fate</span><span>NO ← → YES</span></div>
+      <div class="bar bip"><i id="fateMark"></i></div>
+      <div class="meterval" id="fateVal">0</div>
+    </div>
+    <div>
+      <div class="lbl"><span>Chaos</span><span>flattens odds</span></div>
+      <div class="bar"><b id="chaosFill"></b></div>
+      <div class="meterval" id="chaosVal">0 / 100</div>
+    </div>
+    <div class="invwrap">
+      <div class="lbl"><span>Inventory</span><span id="invCount">0</span></div>
+      <div class="inv" id="inv"><span class="empty">Empty pockets.</span></div>
+    </div>
+    <dl class="counts">
+      <dt>Events</dt><dd id="cEvents">0</dd>
+      <dt>Anomalies (&lt;5%)</dt><dd id="cAnom">0</dd>
+      <dt>Best combo</dt><dd id="cCombo">0</dd>
+      <dt>Time loops</dt><dd id="cLoops">0</dd>
+      <dt>Timeline splits</dt><dd id="cSplits">0</dd>
+      <dt>Plot twists</dt><dd id="cTwists">0</dd>
+      <dt>Portals</dt><dd id="cPortals">0</dd>
+      <dt>Achievements</dt><dd id="cAch">0</dd>
+      <dt>Possible histories</dt><dd id="cPoss">1</dd>
+    </dl>
+  </aside>
+
+  <aside class="log glass" id="log" aria-label="Event log">
+    <h3><span>Causal log</span><span id="logCount">0</span></h3>
+    <ol id="logList"></ol>
+  </aside>
+
+  <section class="panel glass" id="panel" aria-live="polite"></section>
+</div>
+
+<div class="actcard" id="actcard"><div><div class="num" id="actNum"></div><div class="nm" id="actName"></div><div class="sub" id="actSub"></div></div></div>
+<div class="flash" id="flash"></div>
+<div class="pop" id="pop"></div>
+<div class="vhs" id="vhs"><div>◀◀ REWIND</div></div>
+<div class="toasts" id="toasts"></div>
+<div class="verdict" id="verdict" hidden></div>
+<button class="reopen" id="reopen" hidden>Show verdict</button>
+
+<script>
+/* ===================== EVENT DATA =====================
+   option: [label, weight, fate (+YES / -NO), chaos, specials]
+   specials (space-separated): loop · split · portal · twist · snap · retcon · item:<id> · boss:<id> · ><followupId> */
+const ACTS = [
+  { id: 'I', name: 'The Mundane', sub: 'Just a normal day. Allegedly.', color: '#ffb547', bg: 'stars', n: 7, pool: [
+    { t: 'Your alarm goes off.', o: [['You hit snooze', 60, -1, 2], ['You spring out of bed like a Disney princess', 35, 2, 0], ['It plays a song you have never heard', 5, 0, 8, '>song']] },
+    { t: 'Your toast slides off the plate.', o: [['Butter side down', 70, -2, 0], ['Butter side up', 29, 2, 0], ['It lands perfectly on its edge', 1, 4, 12]] },
+    { t: 'A pigeon lands on your windowsill.', o: [['It coos approvingly', 55, 1, 0], ['It steals your pen', 44, -1, 4, '>pigeon'], ['It salutes you', 1, 3, 10]] },
+    { t: 'The bus pulls up.', o: [['Right on time', 40, 1, 0], ['Full. Drives right past.', 55, -2, 2], ['It’s route 0, which does not exist', 5, 0, 15, '>bus0']] },
+    { t: 'A vending machine eats your dollar.', o: [['It drops two snacks', 20, 3, 2], ['It keeps the dollar', 75, -2, 0], ['It dispenses a brass key', 5, 0, 12, '>key']] },
+    { t: 'Your phone buzzes. Unknown number.', o: [['You answer', 50, 0, 6, '>call'], ['You decline', 50, -1, 0]] },
+    { t: 'The microwave beeps for no reason.', o: [['Popcorn appears inside', 15, 2, 6], ['Silence', 80, 0, 1], ['It starts counting down by itself', 5, -1, 14, '>microwave']] },
+    { t: 'The clock reads 11:11.', o: [['You make a wish in time', 48, 2, 0], ['It flips to 11:12 first', 50, -1, 0], ['It stays 11:11 for an hour', 2, 0, 20, 'loop']] },
+    { t: 'A dog wags its tail at you.', o: [['It brings you a stick', 55, 2, 0], ['It was wagging at someone behind you', 44, -1, 0], ['It says one word: “soon”', 1, 0, 22]] },
+    { t: 'Your toaster pops before you put bread in.', o: [['It’s just eager', 60, 1, 4], ['It is clearly mocking you', 38, -1, 6], ['A Pop-Tart from 1998 emerges, still warm', 2, 2, 14]] },
+    { t: 'You find a forgotten $20 in your jacket.', o: [['Jackpot', 60, 2, 0], ['It’s Monopoly money', 38, -1, 2], ['It’s a $3 bill signed by a raccoon', 2, 0, 16]] },
+  ]},
+  { id: 'II', name: 'Extremely Online', sub: 'The algorithm has noticed you.', color: '#4dff9a', bg: 'memes', n: 7, pool: [
+    { t: 'Duolingo sends you a notification.', o: [['You do your lesson', 40, 2, 0], ['You ignore it', 50, -1, 2], ['The owl is outside your window', 10, -2, 12, '>owl']] },
+    { t: 'You open TikTok for “five minutes.”', o: [['It actually was five minutes', 3, 4, 8], ['It was four hours', 87, -2, 4], ['The algorithm shows you your own future', 10, 0, 14, '>future']] },
+    { t: 'A cat video autoplays.', o: [['The cat plays keyboard', 40, 2, 2], ['The cat knocks a glass off the table, maintaining eye contact', 55, -1, 2], ['It’s Nyan Cat, and it leaves a rainbow across your actual screen', 5, 2, 14]] },
+    { t: 'Someone replies “ratio” to your post.', o: [['You get ratioed', 55, -2, 4], ['You ratio them back', 40, 2, 4], ['The ratio is exactly 1:1. The internet goes silent.', 5, 0, 14]] },
+    { t: 'A Reddit thread titled “AITA?” goes viral.', o: [['NTA', 45, 2, 2], ['YTA', 45, -2, 2], ['The thread is about you. It was posted tomorrow.', 10, 0, 16]] },
+    { t: 'Doge appears in your feed.', o: [['Much yes. Very wow.', 45, 3, 4], ['Such no.', 45, -3, 4], ['Doge hands you a coin', 10, 1, 10, 'item:doge']] },
+    { t: 'The Konami code works in real life.', o: [['You enter it perfectly', 20, 2, 10, 'item:konami'], ['You press B before A', 75, -1, 2], ['Thirty extra lives go to your houseplant', 5, 0, 12]] },
+    { t: 'You hear the Among Us emergency meeting sound.', o: [['You vote out the impostor', 40, 2, 4], ['You get voted out', 50, -2, 6], ['You were the impostor all along', 10, 0, 16, 'twist']] },
+    { t: 'A Minecraft creeper hisses behind you.', o: [['Just your fridge humming', 60, 0, 2], ['Ssssss… BOOM', 35, -3, 8], ['It drops a Totem of Undying', 5, 1, 10, 'item:totem']] },
+    { t: 'Your aura points get audited.', o: [['+10,000 aura', 40, 3, 4], ['−10,000 aura', 50, -3, 4], ['Your aura is so high it’s a weather system', 10, 1, 14]] },
+    { t: 'Your group chat goes silent the second you join.', o: [['They were planning your surprise party', 30, 3, 4], ['They were talking about you', 65, -2, 4], ['They were all bots. Every one.', 5, 0, 18]] },
+    { t: 'A stranger leaves a 47-paragraph comment on your post.', o: [['It’s a compliment', 35, 3, 4], ['It’s a review of your font', 60, -1, 4], ['It’s the source code of reality', 5, 0, 18, 'split']] },
+  ]},
+  { id: 'III', name: 'The Strange', sub: 'Something is slightly off.', color: '#a98bff', bg: 'ripples', n: 6, pool: [
+    { t: 'Déjà vu hits you hard.', o: [['It passes', 60, 0, 3], ['You relive the last minute', 30, 0, 10, 'loop'], ['You remember tomorrow', 10, 2, 12]] },
+    { t: 'A cat walks across your keyboard.', o: [['It types “yes”', 33, 3, 4], ['It types “no”', 33, -3, 4], ['It deletes your homework', 30, -2, 6], ['It writes working Python', 4, 1, 12]] },
+    { t: 'Your reflection blinks a half-second late.', o: [['You blink back', 55, 0, 8], ['It winks', 40, 1, 12], ['It walks out of the mirror', 5, -2, 20, '>mirror']] },
+    { t: 'A goose blocks the sidewalk.', o: [['It steps aside politely', 40, 1, 0], ['It honks a clear NO', 45, -3, 4, 'boss:goose'], ['It hands you a scroll', 15, 1, 12, '>scroll']] },
+    { t: 'Every streetlight turns on at noon.', o: [['Power company glitch', 70, 0, 4], ['They spell out a word', 25, 1, 14], ['They spell your name', 5, 0, 22]] },
+    { t: 'A fortune cookie is on your pillow.', o: [['It says “Go for it”', 40, 3, 4], ['It is empty', 50, -2, 2], ['It contains a smaller cookie', 10, 0, 10, '>cookie']] },
+    { t: 'Gravity weakens by 2% for one minute.', o: [['You jump extra high', 60, 1, 8], ['Your drink floats away', 38, -1, 8], ['It reverses entirely', 2, 0, 30, 'portal']] },
+    { t: 'Every clock in the city stops at once.', o: [['They restart a second later', 60, 0, 8], ['They run backwards', 30, 0, 16, 'loop'], ['They run at two different speeds', 10, 0, 18, 'split']] },
+    { t: 'A squirrel stares at you, holding an acorn.', o: [['It offers it to you', 40, 2, 2], ['It throws it at you', 55, -2, 2], ['It’s holding a tiny contract', 5, 0, 14, '>contract']] },
+    { t: 'You find a VHS tape labeled with tomorrow’s date.', o: [['It’s blank', 60, 0, 6], ['It’s a recording of you saying YES', 20, 4, 12], ['It’s a recording of you saying NO', 20, -4, 12]] },
+  ]},
+  { id: 'IV', name: 'The Franchise Multiverse', sub: 'Every universe you’ve ever binged, all at once.', color: '#52d4ff', bg: 'hyper', n: 8, pool: [
+    { t: 'A wizard on a bridge yells “You shall not pass!”', o: [['You pass anyway', 30, 2, 6], ['You do not pass', 60, -2, 2], ['You and the wizard become roommates', 10, 1, 12]] },
+    { t: 'A man in a black helmet breathes heavily: “I am your father.”', o: [['He’s lying', 50, 1, 4], ['He’s not lying', 40, 0, 12, 'twist'], ['He’s your landlord. Rent is due.', 10, -2, 6]] },
+    { t: 'An ogre insists this is his swamp.', o: [['You leave the swamp', 55, -1, 2, 'boss:shrek'], ['You stay and befriend a talking donkey', 40, 2, 6], ['The swamp has layers. Like an onion.', 5, 1, 12]] },
+    { t: 'A wild Pikachu appears!', o: [['You throw a Poké Ball', 45, 2, 4, 'item:pokeball'], ['You run away', 50, -1, 0], ['It uses Thunderbolt on the timeline', 5, 0, 18, 'split']] },
+    { t: 'A blue police box materializes in your living room.', o: [['It’s bigger on the inside', 60, 2, 10], ['It leaves without you', 35, -2, 4], ['It takes you back five minutes', 5, 0, 14, 'loop']] },
+    { t: 'A DeLorean screeches to a stop at 88 mph.', o: [['The driver hands you a flux capacitor', 30, 1, 10, 'item:flux'], ['It vanishes, leaving flaming tire tracks', 65, 0, 6], ['It runs over your previous timeline', 5, 0, 16, 'retcon']] },
+    { t: 'Someone offers you a red pill and a blue pill.', o: [['Red pill', 50, 2, 14], ['Blue pill', 50, -2, 0]] },
+    { t: 'A plumber in a red cap bonks a block above your head.', o: [['A Super Mushroom pops out', 40, 2, 4, 'item:mushroom'], ['You lose a life', 50, -2, 2], ['A Blue Shell drops into your hands', 10, 0, 12, 'item:blueshell']] },
+    { t: 'You find a lightsaber at a thrift store for $4.', o: [['It works', 30, 2, 8, 'item:saber'], ['It’s a flashlight', 65, -1, 0], ['It’s a flashlight that hums ominously', 5, 1, 10]] },
+    { t: 'A purple titan in a golden glove shows up looking for stones.', o: [['You hand him your kidney stone', 40, -1, 8], ['He trips and you grab the glove', 15, 0, 14, 'item:gauntlet'], ['He snaps', 45, 0, 20, 'snap']] },
+    { t: 'A hobbit asks you to hold a ring “just for a second.”', o: [['You pocket it', 30, 0, 10, 'item:ring'], ['You yeet it into a volcano', 50, 2, 6], ['You whisper “my precious”', 20, -2, 10]] },
+    { t: 'A stranger hands you a towel and says “Don’t panic.”', o: [['You keep the towel', 50, 1, 4, 'item:towel'], ['You panic', 50, -2, 8]] },
+    { t: 'The Avengers are assembling. There’s one empty seat.', o: [['They pick you', 25, 3, 8], ['They pick a raccoon instead', 70, -1, 4], ['The seat was a portal', 5, 0, 18, 'portal']] },
+    { t: 'The Sorting Hat is placed on your head.', o: [['Gryffindor', 25, 2, 4], ['Slytherin', 25, -2, 4], ['Hufflepuff', 25, 1, 2], ['Ravenclaw', 23, 0, 2], ['The hat just says “lol”', 2, 0, 16]] },
+  ]},
+  { id: 'V', name: 'The Absurd', sub: 'The world has stopped pretending.', color: '#ff8a3d', bg: 'confetti', n: 6, pool: [
+    { t: 'The government announces a national coin flip.', o: [['Heads', 49, 2, 4], ['Tails', 49, -2, 4], ['It lands in the president’s coffee', 2, 0, 16]] },
+    { t: 'The ocean goes out and does not come back for an hour.', o: [['It returns with gifts', 30, 2, 10], ['It returns angrier', 65, -2, 8], ['A different ocean comes back', 5, 0, 20]] },
+    { t: 'A blimp writes a message across the sky.', o: [['“YES”', 30, 4, 6], ['“NO”', 30, -4, 6], ['An ad for socks', 40, 0, 2]] },
+    { t: 'Your Roomba gains sentience.', o: [['It cleans with purpose', 50, 2, 6], ['It unionizes the toaster', 45, -1, 8], ['It declares itself your final boss', 5, 0, 16, 'boss:roomba']] },
+    { t: 'A raccoon is elected mayor.', o: [['Trash pickup is now daily', 60, 2, 6], ['All trash is now classified', 38, -2, 8], ['It appoints you Vice Raccoon', 2, 3, 16]] },
+    { t: 'Every vending machine starts dispensing Krabby Patties.', o: [['They’re delicious', 55, 2, 6], ['The secret formula leaks', 40, -1, 10], ['Plankton finally wins', 5, -3, 16]] },
+    { t: 'Barbie and Oppenheimer get re-released on the same day.', o: [['You see Barbie', 40, 2, 4], ['You see Oppenheimer', 40, -1, 4], ['You see both and ascend to Barbenheimer', 20, 1, 12]] },
+    { t: 'Volcanoes start erupting confetti.', o: [['Gold confetti', 30, 3, 8], ['Gray confetti', 60, -1, 4], ['Confetti that spells words', 10, 0, 14]] },
+    { t: 'You are accidentally crowned ruler of a small nation.', o: [['You decree YES', 35, 4, 10], ['You decree NO', 35, -4, 10], ['You abdicate to a goose', 30, 0, 14, 'boss:goose']] },
+    { t: 'Every elevator on Earth goes to floor 13.', o: [['Floor 13 is a garden', 40, 2, 10], ['Floor 13 is a waiting room', 58, -2, 8], ['Floor 13 is this exact moment, again', 2, 0, 26, 'loop']] },
+    { t: 'Your unread emails become sentient.', o: [['They answer themselves', 30, 3, 8], ['They multiply', 65, -2, 8, 'boss:dragon'], ['They achieve inbox zero by deleting you', 5, -3, 18]] },
+  ]},
+  { id: 'VI', name: 'The Cosmic', sub: 'The sky has opinions now.', color: '#ff7ac6', bg: 'nebula', n: 6, pool: [
+    { t: 'A comet changes course.', o: [['Toward Earth', 30, -3, 16], ['Away from Earth', 68, 2, 6], ['It parks in orbit and waits', 2, 0, 24, '>comet']] },
+    { t: 'A Vogon fleet arrives to build a hyperspace bypass through your street.', o: [['They lose the paperwork', 55, 2, 8], ['They read you their poetry', 43, -3, 10], ['They need one signature: yours', 2, 0, 22, 'portal']] },
+    { t: 'The answer to life, the universe, and everything is announced.', o: [['It’s 42', 60, 0, 6, 'item:f42'], ['It’s “yes”', 20, 4, 8], ['It’s “no”', 20, -4, 8]] },
+    { t: 'A lion’s face appears in the clouds and says “Remember who you are.”', o: [['You remember', 50, 3, 8], ['You forget immediately', 48, -2, 6], ['It’s just a cloud shaped like a lion', 2, 0, 10]] },
+    { t: 'A signal arrives from 4.2 light-years away.', o: [['It says “hello”', 40, 2, 10], ['It says “no”', 30, -4, 10], ['It’s your Wi-Fi password', 30, 0, 14]] },
+    { t: 'A black hole the size of a marble forms.', o: [['It evaporates harmlessly', 80, 0, 8], ['It eats your homework', 19, 2, 10], ['It eats the concept of Tuesday', 1, 0, 30]] },
+    { t: 'Saturn’s rings tilt three degrees.', o: [['Astronomers shrug', 70, 0, 4], ['From Earth, they now spell YES', 15, 5, 14], ['From Earth, they now spell NO', 15, -5, 14]] },
+    { t: 'Every star blinks once.', o: [['In sequence', 50, 0, 14], ['All at once', 48, 0, 18, 'split'], ['All except one', 2, 0, 28, '>star']] },
+    { t: 'A space whale is detected near Jupiter.', o: [['It’s friendly', 55, 3, 10], ['It’s hungry', 40, -3, 12], ['It’s you, from the future', 5, 0, 26]] },
+    { t: 'A constellation rearranges itself.', o: [['Into a thumbs-up', 40, 4, 12], ['Into a thumbs-down', 40, -4, 12], ['Into a QR code', 20, 0, 18]] },
+  ]},
+  { id: 'VII', name: 'The Quantum', sub: 'Reality is open for editing.', color: '#c8f5ff', bg: 'matrix', n: 6, pool: [
+    { t: 'You observe a single particle.', o: [['It’s here', 50, 1, 10], ['It’s there', 50, -1, 10]] },
+    { t: 'The universe’s source code throws an error.', o: [['It’s caught', 60, 0, 12], ['Uncaught exception', 38, -2, 20, 'loop'], ['The error reads: “just decide already”', 2, 0, 30]] },
+    { t: 'Schrödinger’s cat escapes the box.', o: [['Alive', 49, 3, 10], ['Dead', 49, -3, 10], ['Both, and annoyed about it', 2, 0, 30, 'split']] },
+    { t: 'A sorcerer views 14,000,605 possible futures.', o: [['You see the one where it works', 2, 6, 24], ['You see the 14,000,604 where it doesn’t', 98, -2, 10]] },
+    { t: 'You meet a version of you from the Spider-Verse.', o: [['Their canon event was saying YES', 45, 3, 12], ['Their canon event was saying NO', 45, -3, 12], ['You become a canon event', 10, 0, 22, 'split']] },
+    { t: 'Probability itself takes a coffee break.', o: [['Everything is 50/50 for a moment', 60, 0, 20], ['Everything becomes certain', 38, 0, -30], ['Nothing is possible', 2, -2, 40]] },
+    { t: 'A version of you who chose differently waves.', o: [['They look happier', 45, -3, 14], ['They look worse', 50, 3, 14], ['You swap places', 5, 0, 28, 'twist']] },
+    { t: 'The simulation reloads a save point.', o: [['From five minutes ago', 60, 0, 16, 'loop'], ['From the Big Bang', 2, 0, 40, 'loop'], ['Save failed. Continuing.', 38, 0, 10]] },
+    { t: 'Entropy reverses for one second.', o: [['A broken mug unbreaks', 60, 2, 12], ['Your worst moment un-happens', 38, 1, 14, 'retcon'], ['The final coin un-flips', 2, 0, 30]] },
+    { t: 'The many-worlds tally comes in.', o: [['Most worlds say YES', 48, 4, 12], ['Most worlds say NO', 48, -4, 12], ['Exactly tied', 4, 0, 30]] },
+  ]},
+];
+const BOSS_ACT = { id: 'VIII', name: 'Boss Fight', sub: 'Every timeline has led to this.', color: '#ff3b4e', bg: 'boss' };
+const FOLLOW = {
+  song: { t: 'The mystery alarm song is stuck in your head.', o: [['It’s a banger', 60, 2, 2], ['It’s an ominous hum', 40, -1, 8]] },
+  pigeon: { t: 'The pigeon carries your pen to City Hall.', o: [['It signs a new law in your favor', 10, 3, 15], ['It drops the pen in a fountain', 90, -1, 2]] },
+  bus0: { t: 'You board route 0. The driver has no face.', o: [['You get off at the next stop', 70, 0, 5], ['You ride to the end of the line', 30, 0, 25, 'portal']] },
+  key: { t: 'The key fits a door you’ve walked past a thousand times.', o: [['A broom closet', 80, -1, 2], ['A staircase going down', 20, 1, 18, '>stairs']] },
+  call: { t: 'The caller says your name, then asks: “yes or no?”', o: [['You say yes', 50, 3, 6], ['You say no', 50, -3, 6]] },
+  microwave: { t: 'The microwave reaches zero.', o: [['A tiny confetti cannon pops', 70, 2, 4], ['Every light in the kitchen goes out', 30, -2, 12]] },
+  future: { t: 'Your future self’s message reads: “don’t flip the coin.”', o: [['You obey', 50, -1, 4], ['You flip it anyway', 50, 1, 14, 'split']] },
+  stairs: { t: 'The staircase goes past the basement. And keeps going.', o: [['You go down', 60, 1, 20, 'portal'], ['You close the door', 40, -1, 0]] },
+  mirror: { t: 'Your reflection is now loose in the city.', o: [['It does your chores', 50, 2, 8], ['It opens a rival bakery', 50, -2, 10]] },
+  scroll: { t: 'The goose’s scroll is a list of names.', o: [['Yours is crossed out', 50, -2, 6, 'boss:goose'], ['Yours is circled twice', 50, 2, 6]] },
+  cookie: { t: 'Inside the smaller cookie is an even smaller cookie.', o: [['You keep opening them', 30, 0, 15, 'loop'], ['You eat it whole', 70, 1, 2]] },
+  contract: { t: 'The squirrel’s contract has one clause: “The acorn decides.”', o: [['You sign', 60, 2, 10], ['You refuse', 40, -2, 6]] },
+  owl: { t: 'The Duolingo owl is at your window. It has been waiting.', o: [['You do 47 lessons immediately', 60, 2, 4], ['You close the curtains', 40, -2, 8, 'boss:owl']] },
+  comet: { t: 'The parked comet sends you a friend request.', o: [['Accept', 60, 2, 12], ['Ignore', 40, -2, 10]] },
+  star: { t: 'The one star that didn’t blink is watching you.', o: [['It winks', 50, 4, 16], ['It goes dark', 50, -4, 16, 'boss:demon']] },
+};
+const ITEMS = {
+  totem: ['Totem of Undying', 'Revives you once in the boss fight'],
+  pokeball: ['Poké Ball', '15% chance to catch the boss instantly'],
+  mushroom: ['Super Mushroom', '+25 max HP in the boss fight'],
+  konami: ['Konami Code', '+30 max HP. Thirty extra lives, roughly.'],
+  saber: ['Thrift-Store Lightsaber', '+6 damage on every hit'],
+  gauntlet: ['Slightly Used Gauntlet', 'Snaps the boss to half HP, once'],
+  ring: ['Suspicious Gold Ring', 'Invisible: the boss misses its first two attacks'],
+  towel: ['Towel', 'Chaos can never pass 90'],
+  flux: ['Flux Capacitor', 'Retcons your worst outcome before the boss'],
+  blueshell: ['Blue Shell', 'Hits whoever is winning the boss fight for 30'],
+  doge: ['Dogecoin', 'Final coin: +5% YES. Much yes.'],
+  f42: ['The Number 42', 'Final coin: +4.2% YES'],
+};
+const BOSSES = {
+  roomba: { name: 'The Sentient Roomba', title: 'It has mapped your entire house. And your weaknesses.', moves: ['Suction Vortex', 'Bumps Your Ankle', 'Remaps the Floor', 'Low Battery Beep'] },
+  owl: { name: 'The Duolingo Owl', title: 'You missed your Spanish lesson. It remembers.', moves: ['Streak Freeze', 'Passive-Aggressive Notification', '¿Dónde Está La Biblioteca?', 'Guilt Trip'] },
+  goose: { name: 'An Untitled Goose', title: 'It is a horrible goose. That is enough.', moves: ['HONK', 'Steals Your Keys', 'Wing Slap', 'Unblinking Stare'] },
+  shrek: { name: 'An Ogre, Defending His Swamp', title: 'What are you doing in his swamp?!', moves: ['Onion Layers', 'Swamp Gas', 'Ogre Roar', 'Better Out Than In'] },
+  dragon: { name: 'The Ender Dragon of Unread Emails', title: '1,847 unread. All marked urgent.', moves: ['Reply-All Storm', 'Per My Last Email', '8 AM Calendar Invite', 'Circle Back'] },
+  bowser: { name: 'Bowser, Now With an MBA', title: 'He kidnapped your princess AND your quarterly earnings.', moves: ['Fire Breath', 'Hostile Takeover', 'Shell Spin', 'Synergy'] },
+  demon: { name: 'Your Sleep Paralysis Demon (in a Tuxedo)', title: 'It has been watching you sleep. Professionally.', moves: ['3 AM Thoughts', 'That Thing You Said in 2016', 'Existential Dread', 'Rips Off the Mattress Tag'] },
+  procrast: { name: 'The Final Form of Your Procrastination', title: 'It will fight you… later.', moves: ['Five More Minutes', 'Opens a New Tab', 'Reorganizes the Desk', 'Starts a New Hobby'] },
+};
+const YOU_MOVES = ['Kamehameha', 'Hadouken', 'Falcon Punch', 'Rasengan', 'Spin Attack', 'Shoryuken', 'Aggressive Eye Contact', 'Emotional Damage', 'Uno Reverse Card', 'Yeet', 'Spirit Bomb', 'Let Him Cook'];
+const ACH = {
+  glitch: ['Glitch in the Matrix', 'Witness your first anomaly'],
+  million: ['One in a Hundred', 'Something under 1% happened'],
+  combo: ['C-C-C-Combo', 'Five outcomes in a row going the same way'],
+  chaos: ['Agent of Chaos', 'Max out the chaos meter'],
+  hoarder: ['Inventory Goblin', 'Carry four items at once'],
+  groundhog: ['Groundhog Day', 'Get stuck in two time loops'],
+  tourist: ['Multiverse Tourist', 'Split the timeline'],
+  speedrun: ['Any% Speedrun', 'Skip an act through a portal'],
+  twist: ['Didn’t See That Coming', 'Survive a plot twist'],
+  balanced: ['Perfectly Balanced', 'Get snapped'],
+  scott: ['Great Scott!', 'Rewrite your own history'],
+  catch: ['Gotta Catch ’Em All', 'Catch the final boss in a Poké Ball'],
+  flawless: ['Flawless Victory', 'Win the boss fight above half HP'],
+  edge: ['Edge Case', 'The final coin lands on its edge'],
+};
+const LADDER = [[0, 'a coin flip'], [2.6, 'rolling two natural 20s in a row'], [6.1, 'getting struck by lightning this year'], [8.47, 'winning the Powerball jackpot'], [16.9, 'winning Powerball twice in a row'], [25.4, 'winning Powerball three times in a row'], [33.9, 'winning Powerball four times in a row'], [50.1, 'picking one specific atom out of planet Earth'], [67.9, 'shuffling a deck into one exact order'], [80, 'picking one specific atom in the observable universe']];
+
+/* ===================== SIMULATION ===================== */
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const sigmoid = x => 1 / (1 + Math.exp(-x));
+const snapOf = s => ({ ...s, items: [...s.items], achs: [...s.achs] });
+
+function simulate(seed) {
+  const rng = mulberry32(seed);
+  const pick = a => a[Math.floor(rng() * a.length)];
+  const S = { fate: 0, chaos: 8, odds: 0, poss: 0, anomalies: 0, loops: 0, splits: 0, portals: 0, twists: 0, events: 0, combo: 0, comboSign: 0, maxCombo: 0, items: [], achs: [], boss: null, fluxUsed: false };
+  const steps = [], mainEvents = [];
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const ach = id => { if (!S.achs.includes(id)) { S.achs.push(id); steps.push({ type: 'ach', id }); } };
+
+  // Chaos flattens the weights (rare outcomes get likelier); fate nudges outcomes that agree with it.
+  function probs(ev, st) {
+    const e = 1 - clamp(st.chaos, 0, 100) / 150;
+    const ws = ev.o.map(o => Math.pow(o[1], e) * Math.exp(0.05 * st.fate * Math.sign(o[2])));
+    const sum = ws.reduce((a, b) => a + b, 0);
+    return ws.map(w => w / sum);
+  }
+  function resolve(ev, st) {
+    const p = probs(ev, st);
+    let r = rng(), i = 0;
+    while (i < p.length - 1 && r >= p[i]) { r -= p[i]; i++; }
+    const o = ev.o[i], sg = Math.sign(o[2]);
+    if (sg !== 0 && sg === st.comboSign) st.combo++; else { st.combo = sg ? 1 : 0; st.comboSign = sg; }
+    st.maxCombo = Math.max(st.maxCombo, st.combo);
+    const bonus = st.combo >= 3 ? sg * Math.min(st.combo - 2, 3) : 0;
+    const delta = o[2] + bonus;
+    st.fate = clamp(st.fate + delta, -30, 30);
+    st.chaos = clamp(st.chaos + o[3] + 1, 0, st.items.includes('towel') ? 90 : 100);
+    st.odds += -Math.log10(p[i]);
+    st.poss += Math.log10(ev.o.length);
+    st.events++;
+    const rare = p[i] < 0.05;
+    if (rare) st.anomalies++;
+    return { i, p, o, rare, delta, bonus, combo: st.combo, snap: snapOf(st) };
+  }
+  function checkAch(r) {
+    if (r.rare) ach('glitch');
+    if (r.p[r.i] < 0.01) ach('million');
+    if (S.combo >= 5) ach('combo');
+    if (S.chaos >= 100) ach('chaos');
+  }
+  function gain(id) {
+    if (S.items.includes(id)) return;
+    S.items.push(id);
+    steps.push({ type: 'item', id, snap: snapOf(S) });
+    if (S.items.length >= 4) ach('hoarder');
+  }
+  function retcon(act, why) {
+    let worst = null;
+    for (const m of mainEvents) if (!m.retconned && (!worst || m.r.delta < worst.r.delta)) worst = m;
+    if (!worst || worst.r.delta >= 0) { steps.push({ type: 'retcon', act, why, target: null, snap: snapOf(S) }); return; }
+    worst.retconned = true;
+    S.fate = clamp(S.fate - 2 * worst.r.delta, -30, 30);
+    steps.push({ type: 'retcon', act, why, target: worst, delta: worst.r.delta, snap: snapOf(S) });
+    ach('scott');
+  }
+  let actCount = 0;
+  function runEvent(ev, act, opts) {
+    const r = resolve(ev, S);
+    const st = { type: 'event', act, ev, r, cons: !!opts.cons, looped: !!opts.looped };
+    steps.push(st); mainEvents.push(st); actCount++;
+    checkAch(r);
+    const res = { next: null, portal: false, split: false, loop: false };
+    for (const t of (r.o[4] || '').split(' ').filter(Boolean)) {
+      if (t.startsWith('item:')) gain(t.slice(5));
+      else if (t.startsWith('boss:')) { if (S.boss !== t.slice(5)) { S.boss = t.slice(5); steps.push({ type: 'bossmark', id: S.boss }); } }
+      else if (t === 'twist') { S.fate = -S.fate; S.comboSign = -S.comboSign; S.twists++; steps.push({ type: 'twist', act, snap: snapOf(S) }); ach('twist'); }
+      else if (t === 'snap') { S.fate = Math.round(S.fate / 2); S.chaos = Math.round(S.chaos / 2); steps.push({ type: 'snap', act, snap: snapOf(S) }); ach('balanced'); }
+      else if (t === 'retcon') retcon(act, 'event');
+      else if (t[0] === '>') res.next = t.slice(1);
+      else res[t] = true;
+    }
+    if (res.loop && S.loops < 8) {
+      S.loops++;
+      steps.push({ type: 'loop', act, snap: snapOf(S) });
+      if (S.loops >= 2) ach('groundhog');
+      return runEvent(ev, act, { looped: true });
+    }
+    return res;
+  }
+  function doSplit(act, pool) {
+    S.splits++;
+    steps.push({ type: 'split', act, snap: snapOf(S) });
+    ach('tourist');
+    const base = snapOf(S), A = snapOf(S), B = snapOf(S);
+    let k = 0;
+    for (; k < 3; k++) {
+      const sev = pool.pop();
+      if (!sev) break;
+      const a = resolve(sev, A), b = resolve(sev, B);
+      steps.push({ type: 'split-event', act, ev: sev, a, b });
+      if (a.rare || b.rare) ach('glitch');
+    }
+    actCount += k;
+    const pA = sigmoid((A.fate - B.fate) / 4);
+    const keepA = rng() < pA;
+    const W = keepA ? A : B, L = keepA ? B : A;
+    Object.assign(S, { fate: W.fate, chaos: W.chaos, combo: W.combo, comboSign: W.comboSign, maxCombo: Math.max(A.maxCombo, B.maxCombo) });
+    S.odds = W.odds + (L.odds - base.odds) - Math.log10(keepA ? pA : 1 - pA);
+    S.poss = W.poss + (L.poss - base.poss) + Math.log10(2);
+    S.events = W.events + (L.events - base.events);
+    S.anomalies = W.anomalies + (L.anomalies - base.anomalies);
+    steps.push({ type: 'collapse', act, keepA, pA, snap: snapOf(S) });
+  }
+
+  for (const act of ACTS) {
+    steps.push({ type: 'act', act });
+    const pool = shuffle(act.pool.slice());
+    let next = null;
+    actCount = 0;
+    while (actCount < act.n) {
+      const ev = next ? FOLLOW[next] : pool.pop();
+      const cons = !!next; next = null;
+      if (!ev) break;
+      const res = runEvent(ev, act, { cons });
+      if (res.next) next = res.next;
+      else if (res.portal) { S.portals++; steps.push({ type: 'portal', act, snap: snapOf(S) }); ach('speedrun'); break; }
+      else if (res.split) doSplit(act, pool);
+    }
+  }
+  if (S.items.includes('flux') && !S.fluxUsed) { S.fluxUsed = true; retcon(ACTS[ACTS.length - 1], 'flux'); }
+
+  /* ---- Boss fight ---- */
+  steps.push({ type: 'act', act: BOSS_ACT });
+  const bid = S.boss || pick(Object.keys(BOSSES)), B = BOSSES[bid];
+  const has = id => S.items.includes(id);
+  const youMax = clamp(100 + S.fate * 3, 40, 200) + (has('mushroom') ? 25 : 0) + (has('konami') ? 30 : 0);
+  const bossMax = 110 + Math.round(S.chaos / 2);
+  let you = youMax, bh = bossMax, lowest = youMax;
+  steps.push({ type: 'boss-intro', boss: B, bid, youMax, bossMax, items: [...S.items], chosen: !!S.boss });
+  const P = p => { S.odds += -Math.log10(p); };
+  if (has('pokeball')) {
+    const caught = rng() < 0.15; P(caught ? 0.15 : 0.85); S.poss += Math.log10(2);
+    steps.push({ type: 'boss-ball', caught, you, bh: caught ? 0 : bh });
+    if (caught) { bh = 0; ach('catch'); }
+  }
+  let turnYou = S.fate >= 0, misses = has('ring') ? 2 : 0, gaunt = has('gauntlet'), shell = has('blueshell'), totem = has('totem'), round = 0;
+  const reviveCheck = () => { if (you <= 0 && totem) { totem = false; you = 30; steps.push({ type: 'boss-revive', you, bh }); } };
+  while (you > 0 && bh > 0 && round < 40) {
+    round++;
+    if (gaunt && round >= 3 && bh > bossMax * 0.5) {
+      gaunt = false; const d = Math.ceil(bh / 2); bh -= d;
+      steps.push({ type: 'boss-gauntlet', dmg: d, you, bh });
+    }
+    if (shell && round >= 4 && Math.abs(you / youMax - bh / bossMax) > 0.2) {
+      shell = false; const hitYou = you / youMax > bh / bossMax;
+      if (hitYou) you = Math.max(0, you - 30); else bh = Math.max(0, bh - 30);
+      steps.push({ type: 'boss-shell', hitYou, you, bh });
+      lowest = Math.min(lowest, you); reviveCheck();
+      if (you <= 0 || bh <= 0) break;
+    }
+    const att = turnYou ? 'you' : 'boss';
+    let kind;
+    if (att === 'boss' && misses > 0) { misses--; kind = 'ring'; }
+    else { const x = rng(); kind = x < 0.1 ? 'miss' : x < 0.22 ? 'crit' : 'hit'; P(kind === 'miss' ? 0.1 : kind === 'crit' ? 0.12 : 0.78); S.poss += Math.log10(3); }
+    let dmg = 0;
+    if (kind === 'hit' || kind === 'crit') { dmg = 8 + Math.floor(rng() * 15) + (att === 'you' && has('saber') ? 6 : 0); if (kind === 'crit') dmg *= 2; }
+    const move = att === 'you' ? pick(YOU_MOVES) : pick(B.moves);
+    if (att === 'you') bh = Math.max(0, bh - dmg); else you = Math.max(0, you - dmg);
+    lowest = Math.min(lowest, you);
+    steps.push({ type: 'boss-hit', att, move, kind, dmg, you, bh, round });
+    reviveCheck();
+    turnYou = !turnYou;
+  }
+  const won = bh <= 0 || (you > 0 && you / youMax >= bh / bossMax);
+  S.fate = clamp(S.fate + (won ? 8 : -8), -30, 30);
+  S.events++;
+  if (won && lowest >= youMax * 0.5) ach('flawless');
+  steps.push({ type: 'boss-end', won, you, bh, boss: B, snap: snapOf(S) });
+
+  /* ---- The Final Coin ---- */
+  const bonusYes = (has('doge') ? 0.05 : 0) + (has('f42') ? 0.042 : 0);
+  const pYes = clamp(sigmoid(S.fate / 6) + bonusYes, 0.02, 0.98);
+  const edgeP = 0.003 + S.chaos / 4000;
+  const edge = rng() < edgeP;
+  let yes, flips = [];
+  if (edge) {
+    flips = [rng() < 0.5, rng() < 0.5, rng() < 0.5];
+    yes = flips.filter(Boolean).length >= 2;
+    S.odds += -Math.log10(edgeP) + 3 * Math.log10(2);
+    S.poss += Math.log10(3) + 3 * Math.log10(2);
+    ach('edge');
+  } else {
+    yes = rng() < pYes;
+    S.odds += -Math.log10(yes ? pYes : 1 - pYes);
+    S.poss += Math.log10(2);
+  }
+  S.events++;
+  steps.push({ type: 'final', pYes, bonusYes, edge, edgeP, flips, yes, snap: snapOf(S) });
+  return { steps, S };
+}
+
+/* ===================== FORMATTING ===================== */
+function fmtOdds(L) {
+  if (L < 6) return '1 in ' + Math.max(1, Math.round(Math.pow(10, L))).toLocaleString();
+  const e = Math.floor(L), m = Math.pow(10, L - e);
+  return `1 in ${m.toFixed(1)} × 10<sup>${e}</sup>`;
+}
+function fmtBig(L) {
+  if (L < 6) return Math.round(Math.pow(10, L)).toLocaleString();
+  const e = Math.floor(L), m = Math.pow(10, L - e);
+  return `${m.toFixed(1)} × 10<sup>${e}</sup>`;
+}
+function pct(p) { return p >= 0.995 ? '99.5%+' : p < 0.001 ? (p * 100).toFixed(3) + '%' : (p * 100).toFixed(p < 0.1 ? 1 : 0) + '%'; }
+function oneIn(p) { return '1 in ' + Math.round(1 / p).toLocaleString(); }
+function rarer(L) { let r = LADDER[0][1]; for (const [t, s] of LADDER) if (L >= t) r = s; return r; }
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ===================== CANVAS WORLD ===================== */
+const cv = document.getElementById('world');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const world = { edges: [], heads: [], sparks: [], parts: [], rings: [], bolts: [], beams: [], floaters: [], word: [], camX: 0, camY: 0, tCamX: 0, tCamY: 0, manual: false, shake: 0, actColor: '#ffb547', stars: [], bg: 'stars', bgp: [], fight: null };
+const STEP_Y = 120;
+const MEME_WORDS = ['W', 'L', 'ratio', 'based', '+aura', '−aura', 'no cap', 'fr fr', 'ong', 'sus', 'rizz', 'mid', 'bussin', 'slay', 'ate', 'NPC', 'skibidi', 'lowkey', 'touch grass', 'it’s giving', 'main character', 'canon event', 'ded', 'GG', 'POV:'];
+
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  bgInit(world.bg);
+  if (world.wordInfo) formWord(world.wordInfo.word, world.wordInfo.color, true);
+}
+for (let i = 0; i < 260; i++) world.stars.push({ x: Math.random(), y: Math.random(), d: Math.random() * 0.8 + 0.1, s: Math.random() * 1.4 + 0.3, tw: Math.random() * 6.28 });
+
+function bgInit(mode) {
+  world.bg = mode; const P = world.bgp = [];
+  const R = Math.random;
+  if (mode === 'memes') for (let i = 0; i < 46; i++) P.push({ x: R() * W, y: R() * H, v: .3 + R() * .9, w: MEME_WORDS[Math.floor(R() * MEME_WORDS.length)], s: 11 + R() * 18, a: .07 + R() * .14, rot: (R() - .5) * .4 });
+  if (mode === 'hyper') for (let i = 0; i < 320; i++) P.push({ x: (R() - .5) * W * 2, y: (R() - .5) * H * 2, z: R() * 1000 + 1 });
+  if (mode === 'confetti') for (let i = 0; i < 140; i++) P.push({ x: R() * W, y: R() * H, vy: .6 + R() * 1.6, vx: (R() - .5) * .6, r: R() * 6.28, vr: (R() - .5) * .15, c: ['#ff8a3d', '#ffd36b', '#4fe3a1', '#52d4ff', '#ff5dd2', '#a98bff'][Math.floor(R() * 6)], w: 4 + R() * 6, h: 6 + R() * 8 });
+  if (mode === 'nebula') for (let i = 0; i < 5; i++) P.push({ x: R() * W, y: R() * H, r: 200 + R() * 300, c: ['#ff7ac6', '#7a5cff', '#2ad4ff', '#ff5d6c', '#ffb547'][i], vx: (R() - .5) * .25, vy: (R() - .5) * .25 });
+  if (mode === 'matrix') { const n = Math.ceil(W / 16); for (let i = 0; i < n; i++) P.push({ x: i * 16, y: R() * H, v: 2 + R() * 5, ch: Array.from({ length: 10 }, () => R() < .5 ? '0' : '1') }); }
+  if (mode === 'ripples') for (let i = 0; i < 6; i++) P.push({ x: R() * W, y: R() * H, t: R() });
+}
+
+function spreadX() { return Math.min(W * 0.28, 300); }
+function bez(x1, y1, x2, y2, n = 20) {
+  const pts = [], my = (y1 + y2) / 2;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t;
+    pts.push([u * u * u * x1 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x2,
+              u * u * u * y1 + 3 * u * u * t * my + 3 * u * t * t * my + t * t * t * y2]);
+  }
+  return pts;
+}
+function ptAt(pts, f) {
+  const fi = clamp(f, 0, 1) * (pts.length - 1), i = Math.floor(fi), t = fi - i;
+  const a = pts[i], b = pts[Math.min(i + 1, pts.length - 1)];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+function addEdge(pts, color, opts = {}) {
+  const e = { pts, color, grow: opts.instant ? (opts.target ?? 1) : 0, target: opts.target ?? 1, alpha: opts.alpha ?? .85, alphaT: opts.alpha ?? .85, width: opts.width ?? 1.6, kind: opts.kind || 'pending', flick: Math.random() * 6 };
+  world.edges.push(e);
+  return e;
+}
+function branch(head, k, color, instant) {
+  const sx = spreadX(), dx = Math.min(sx * 0.42, 110) * (k > 3 ? 0.7 : 1);
+  const offs = [];
+  for (let i = 0; i < k; i++) offs.push((i - (k - 1) / 2) * dx);
+  const lo = head.x + offs[0], hi = head.x + offs[k - 1];
+  let shift = 0;
+  if (lo < -sx) shift = -sx - lo; else if (hi > sx) shift = sx - hi;
+  return offs.map(o => addEdge(bez(head.x, head.y, head.x + o + shift, head.y + STEP_Y), color, { target: 0.55, width: 1.4, instant, alpha: .7 }));
+}
+function settle(edges, pick, instant, rare) {
+  edges.forEach((e, i) => {
+    if (i === pick) { e.kind = 'main'; e.target = 1; e.width = rare ? 3.4 : 2.6; e.alphaT = 1; if (instant) e.grow = 1; }
+    else {
+      e.kind = 'ghost'; e.alphaT = .16; e.target = .55; if (instant) { e.grow = .55; e.alpha = .16; }
+      const tip = ptAt(e.pts, .55), n = 2 + Math.floor(Math.random() * 2);
+      for (let j = 0; j < n; j++) addEdge(bez(tip[0], tip[1], tip[0] + (Math.random() - .5) * 90, tip[1] + 40 + Math.random() * 50, 10), e.color, { target: 1, width: .8, alpha: .1, kind: 'ghost', instant });
+    }
+  });
+  const ch = edges[pick], end = ch.pts[ch.pts.length - 1];
+  return { edge: ch, x: end[0], y: end[1] };
+}
+function spark(edge, dur, color) { if (!reduced && !run.skip) world.sparks.push({ edge, t0: performance.now(), dur, color }); }
+function ring(x, y, color, big) { if (!reduced && !run.skip) world.rings.push({ x, y, color, t0: performance.now(), big }); }
+function burst(x, y, color, n = 40, sp = 4) {
+  if (reduced || run.skip) return;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, v = Math.random() * sp + .5;
+    world.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, decay: .012 + Math.random() * .02, color, size: Math.random() * 2 + 1 });
+  }
+}
+function bolt(x, y, color) {
+  if (reduced || run.skip) return;
+  const [sx, sy] = toScreen(x, y), pts = [];
+  const cx = sx + (Math.random() - .5) * 300, cy = -10, n = 14;
+  for (let i = 0; i <= n; i++) { const t = i / n; pts.push([cx + (sx - cx) * t + (i && i < n ? (Math.random() - .5) * 60 : 0), cy + (sy - cy) * t]); }
+  world.bolts.push({ pts, color, t0: performance.now() });
+}
+function beam(a, b, color, crit) { if (!reduced && !run.skip) world.beams.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color, crit, t0: performance.now() }); }
+function floater(x, y, text, color, big) { if (!run.skip) world.floaters.push({ x, y, text, color, big, t0: performance.now() }); }
+
+function formWord(word, color, instant) {
+  world.wordInfo = { word, color };
+  const oc = document.createElement('canvas');
+  const fw = Math.min(W - 32, 900), fs = Math.min(fw / (word.length * 0.78), H * 0.26);
+  oc.width = Math.ceil(fw); oc.height = Math.ceil(fs * 1.2);
+  const o = oc.getContext('2d');
+  o.fillStyle = '#fff'; o.font = `900 ${fs}px Unbounded, "Arial Black", sans-serif`; o.textAlign = 'center'; o.textBaseline = 'middle';
+  o.fillText(word, oc.width / 2, oc.height / 2);
+  const data = o.getImageData(0, 0, oc.width, oc.height).data;
+  const step = Math.max(4, Math.round(fs / 30));
+  const ox = (W - oc.width) / 2, oy = Math.max(H * 0.2, 90) - oc.height / 2;
+  const pts = [];
+  for (let y = 0; y < oc.height; y += step) for (let x = 0; x < oc.width; x += step) if (data[(y * oc.width + x) * 4 + 3] > 128) pts.push([ox + x, oy + y]);
+  const src = world.heads[0] ? toScreen(world.heads[0].x, world.heads[0].y) : [W / 2, H / 2];
+  world.word = pts.map(p => ({ tx: p[0], ty: p[1], x: instant || reduced ? p[0] : src[0] + (Math.random() - .5) * 40, y: instant || reduced ? p[1] : src[1] + (Math.random() - .5) * 40, delay: instant ? 0 : Math.random() * 600, t0: performance.now(), color, s: step * 0.42 }));
+}
+function toScreen(x, y) { return [W / 2 + x + world.camX, y - world.camY]; }
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${clamp(a, 0, 1).toFixed(3)})`;
+}
+
+function drawBg(now, dt) {
+  const P = world.bgp, mode = world.bg, f = dt * 60;
+  ctx.fillStyle = '#06070c'; ctx.fillRect(0, 0, W, H);
+  const g = ctx.createRadialGradient(W / 2, H * 0.45, 0, W / 2, H * 0.45, Math.max(W, H) * 0.7);
+  g.addColorStop(0, hexA(world.actColor, mode === 'boss' ? .16 + .08 * Math.sin(now / 300) : .09)); g.addColorStop(1, 'rgba(6,7,12,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  if (mode !== 'hyper' && mode !== 'matrix') for (const s of world.stars) {
+    const y = ((s.y * H - world.camY * s.d * 0.25) % H + H) % H, x = ((s.x * W + world.camX * s.d * 0.25) % W + W) % W;
+    ctx.globalAlpha = (0.35 + 0.35 * Math.sin(now / 900 + s.tw)) * s.d;
+    ctx.fillStyle = '#cfd8ff'; ctx.fillRect(x, y, s.s, s.s);
+  }
+  ctx.globalAlpha = 1;
+  if (reduced) return;
+  if (mode === 'memes') {
+    ctx.textAlign = 'center';
+    for (const p of P) {
+      p.y += p.v * f; if (p.y > H + 30) { p.y = -30; p.x = Math.random() * W; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.font = `800 ${p.s}px Unbounded, sans-serif`; ctx.fillStyle = hexA('#4dff9a', p.a); ctx.fillText(p.w, 0, 0); ctx.restore();
+    }
+  } else if (mode === 'hyper') {
+    const cx = W / 2, cy = H / 2;
+    for (const p of P) {
+      const pz = p.z; p.z -= 14 * f;
+      if (p.z < 1) { p.z = 1000; p.x = (Math.random() - .5) * W * 2; p.y = (Math.random() - .5) * H * 2; continue; }
+      const x1 = cx + p.x / pz * 300, y1 = cy + p.y / pz * 300, x2 = cx + p.x / p.z * 300, y2 = cy + p.y / p.z * 300;
+      ctx.strokeStyle = hexA('#bfefff', Math.min(1, (1000 - p.z) / 600) * .8); ctx.lineWidth = Math.max(.5, 2 - p.z / 500);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+  } else if (mode === 'confetti') {
+    for (const p of P) {
+      p.y += p.vy * f; p.x += (p.vx + Math.sin(now / 700 + p.r) * .4) * f; p.r += p.vr * f;
+      if (p.y > H + 20) { p.y = -20; p.x = Math.random() * W; }
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.scale(1, Math.cos(now / 200 + p.r));
+      ctx.fillStyle = hexA(p.c, .35); ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore();
+    }
+  } else if (mode === 'nebula') {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of P) {
+      p.x += p.vx * f; p.y += p.vy * f;
+      if (p.x < -p.r) p.x = W + p.r; if (p.x > W + p.r) p.x = -p.r; if (p.y < -p.r) p.y = H + p.r; if (p.y > H + p.r) p.y = -p.r;
+      const gg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+      gg.addColorStop(0, hexA(p.c, .14)); gg.addColorStop(1, hexA(p.c, 0));
+      ctx.fillStyle = gg; ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  } else if (mode === 'matrix') {
+    ctx.font = '600 14px "JetBrains Mono", monospace'; ctx.textAlign = 'left';
+    for (const p of P) {
+      p.y += p.v * f; if (p.y - 160 > H) { p.y = -20; p.v = 2 + Math.random() * 5; }
+      if (Math.random() < .05) p.ch[Math.floor(Math.random() * p.ch.length)] = Math.random() < .5 ? '0' : '1';
+      for (let i = 0; i < p.ch.length; i++) {
+        ctx.fillStyle = i === 0 ? 'rgba(230,255,255,.55)' : hexA('#4dffb8', .3 * (1 - i / p.ch.length));
+        ctx.fillText(p.ch[i], p.x, p.y - i * 16);
+      }
+    }
+  } else if (mode === 'ripples') {
+    for (const p of P) {
+      p.t += dt * .18; if (p.t > 1) { p.t = 0; p.x = Math.random() * W; p.y = Math.random() * H; }
+      ctx.strokeStyle = hexA('#a98bff', (1 - p.t) * .22); ctx.lineWidth = 1.5;
+      for (let j = 0; j < 3; j++) { const rr = p.t * 340 - j * 30; if (rr > 0) { ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, 6.283); ctx.stroke(); } }
+    }
+  } else if (mode === 'boss') {
+    if (Math.random() < .012) { const pts = []; let x = Math.random() * W; for (let i = 0; i <= 10; i++) { pts.push([x, i / 10 * H * .6]); x += (Math.random() - .5) * 60; } world.bolts.push({ pts, color: '#ff8a95', t0: now, bg: true }); }
+    const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .3, W / 2, H / 2, Math.max(W, H) * .75);
+    vg.addColorStop(0, 'rgba(255,40,60,0)'); vg.addColorStop(1, `rgba(255,40,60,${(.12 + .06 * Math.sin(now / 250)).toFixed(3)})`);
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!world.manual && world.heads.length) {
+    const fx = world.heads.reduce((a, h) => a + h.x, 0) / world.heads.length;
+    const fy = Math.max(...world.heads.map(h => h.y));
+    world.tCamY = fy - H * (W < 900 ? 0.3 : 0.4);
+    world.tCamX = -fx * 0.85;
+  }
+  const k = reduced ? 1 : Math.min(1, dt * 3);
+  world.camY += (world.tCamY - world.camY) * k;
+  world.camX += (world.tCamX - world.camX) * k;
+  world.shake *= 0.9;
+  const sx = (Math.random() - .5) * world.shake, sy = (Math.random() - .5) * world.shake;
+
+  drawBg(now, dt);
+
+  ctx.save();
+  ctx.translate(W / 2 + world.camX + sx, -world.camY + sy);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const top = world.camY - 200, bot = world.camY + H + 200;
+  for (const e of world.edges) {
+    e.grow += (e.target - e.grow) * (reduced ? 1 : Math.min(1, dt * 4));
+    e.alpha += (e.alphaT - e.alpha) * (reduced ? 1 : Math.min(1, dt * 3));
+    const y0 = e.pts[0][1], y1 = e.pts[e.pts.length - 1][1];
+    if (Math.max(y0, y1) < top || Math.min(y0, y1) > bot) continue;
+    const n = (e.pts.length - 1) * e.grow, full = Math.floor(n);
+    if (n <= 0.01) continue;
+    ctx.beginPath(); ctx.moveTo(e.pts[0][0], e.pts[0][1]);
+    for (let i = 1; i <= full; i++) ctx.lineTo(e.pts[i][0], e.pts[i][1]);
+    const tp = ptAt(e.pts, e.grow); ctx.lineTo(tp[0], tp[1]);
+    let a = e.alpha;
+    if (e.kind === 'pending') a *= 0.6 + 0.4 * Math.sin(now / 90 + e.flick);
+    const col = e.kind === 'dead' ? '#ff5d6c' : e.color;
+    if (e.kind === 'main' || e.kind === 'loop' || e.kind === 'gold') {
+      ctx.strokeStyle = hexA(col, a * (e.kind === 'gold' ? .35 : .18)); ctx.lineWidth = e.width * (e.kind === 'gold' ? 7 : 5); ctx.stroke();
+    }
+    ctx.strokeStyle = hexA(col, a); ctx.lineWidth = e.width; ctx.stroke();
+  }
+  for (const h of world.heads) {
+    const r = 5 + 2 * Math.sin(now / 200);
+    ctx.fillStyle = hexA(world.actColor, .25); ctx.beginPath(); ctx.arc(h.x, h.y, r * 2.4, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(h.x, h.y, r * .7, 0, 6.283); ctx.fill();
+  }
+  const F = world.fight;
+  if (F) {
+    for (const who of ['you', 'boss']) {
+      const f = F[who];
+      f.scale += ((f.dead ? 0 : 1) - f.scale) * Math.min(1, dt * (f.dead ? 3 : 6));
+      if (f.scale <= 0.01) continue;
+      const R = 26 * f.scale, col = who === 'you' ? '#4fe3a1' : '#ff3b4e';
+      const gl = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, R * 3);
+      gl.addColorStop(0, hexA(col, .45)); gl.addColorStop(1, hexA(col, 0));
+      ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(f.x, f.y, R * 3, 0, 6.283); ctx.fill();
+      ctx.save(); ctx.translate(f.x + (f.hitT && now - f.hitT < 250 ? (Math.random() - .5) * 10 : 0), f.y);
+      if (who === 'boss') {
+        ctx.rotate(now / 600); ctx.beginPath();
+        for (let i = 0; i < 18; i++) { const rr = i % 2 ? R * .7 : R * 1.25, a = i / 18 * 6.283; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+        ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+        ctx.rotate(-now / 600); ctx.fillStyle = '#1a0006'; ctx.beginPath(); ctx.arc(-R * .3, -R * .1, R * .16, 0, 6.283); ctx.arc(R * .3, -R * .1, R * .16, 0, 6.283); ctx.fill();
+      } else {
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(0, 0, R, 0, 6.283); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.beginPath(); ctx.arc(-R * .3, -R * .3, R * .25, 0, 6.283); ctx.fill();
+      }
+      ctx.restore();
+      const hpf = f.max ? f.hp / f.max : 0;
+      ctx.strokeStyle = 'rgba(255,255,255,.13)'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(f.x, f.y, R + 12, 0, 6.283); ctx.stroke();
+      ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(f.x, f.y, R + 12, -Math.PI / 2, -Math.PI / 2 + 6.283 * hpf); ctx.stroke();
+      ctx.fillStyle = '#e9edf6'; ctx.font = '600 11px "JetBrains Mono", monospace'; ctx.textAlign = 'center';
+      ctx.fillText(f.label, f.x, f.y - R - 24);
+    }
+  }
+  world.beams = world.beams.filter(b => {
+    const t = (now - b.t0) / (b.crit ? 600 : 420); if (t >= 1) return false;
+    const w = (b.crit ? 12 : 6) * (1 - t);
+    ctx.strokeStyle = hexA(b.color, .35 * (1 - t)); ctx.lineWidth = w * 3; ctx.beginPath(); ctx.moveTo(b.x1, b.y1); ctx.lineTo(b.x2, b.y2); ctx.stroke();
+    ctx.strokeStyle = hexA('#ffffff', 1 - t); ctx.lineWidth = w * .5; ctx.stroke();
+    return true;
+  });
+  world.sparks = world.sparks.filter(s => {
+    const f = (now - s.t0) / s.dur;
+    if (f >= 1) return false;
+    const p = ptAt(s.edge.pts, f * s.edge.grow);
+    for (let i = 0; i < 3; i++) world.parts.push({ x: p[0], y: p[1], vx: (Math.random() - .5) * 1.2, vy: (Math.random() - .5) * 1.2 - .3, life: 1, decay: .03 + Math.random() * .03, color: s.color, size: Math.random() * 2 + 1 });
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p[0], p[1], 3.5, 0, 6.283); ctx.fill();
+    return true;
+  });
+  world.rings = world.rings.filter(r => {
+    const f = (now - r.t0) / (r.big ? 1400 : 900);
+    if (f >= 1) return false;
+    ctx.strokeStyle = hexA(r.color, 1 - f); ctx.lineWidth = r.big ? 3 : 2;
+    for (let j = 0; j < (r.big ? 3 : 1); j++) { ctx.beginPath(); ctx.arc(r.x, r.y, (f * (r.big ? 260 : 90)) * (1 - j * .25), 0, 6.283); ctx.stroke(); }
+    return true;
+  });
+  ctx.globalCompositeOperation = 'lighter';
+  if (world.parts.length > 3500) world.parts.splice(0, world.parts.length - 3500);
+  world.parts = world.parts.filter(p => {
+    p.x += p.vx; p.y += p.vy; p.vx *= p.drag ?? .97; p.vy *= p.drag ?? .97; if (p.g) p.vy += p.g; p.life -= p.decay;
+    if (p.life <= 0) return false;
+    ctx.fillStyle = hexA(p.color, p.life); ctx.fillRect(p.x, p.y, p.size, p.size);
+    return true;
+  });
+  ctx.globalCompositeOperation = 'source-over';
+  world.floaters = world.floaters.filter(fl => {
+    const t = (now - fl.t0) / 1100; if (t >= 1) return false;
+    const s = fl.big ? 30 : 20, sc = t < .15 ? 1 + (1 - t / .15) * .8 : 1;
+    ctx.font = `900 ${s * sc}px Unbounded, "Arial Black", sans-serif`; ctx.textAlign = 'center';
+    ctx.lineWidth = 4; ctx.strokeStyle = hexA('#06070c', 1 - t); ctx.strokeText(fl.text, fl.x, fl.y - t * 50);
+    ctx.fillStyle = hexA(fl.color, 1 - t * t); ctx.fillText(fl.text, fl.x, fl.y - t * 50);
+    return true;
+  });
+  ctx.restore();
+
+  world.bolts = world.bolts.filter(b => {
+    const t = (now - b.t0) / (b.bg ? 300 : 420); if (t >= 1) return false;
+    const a = (1 - t) * (Math.random() < .3 ? .4 : 1) * (b.bg ? .5 : 1);
+    ctx.beginPath(); b.pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+    ctx.strokeStyle = hexA(b.color, a * .4); ctx.lineWidth = 10; ctx.stroke();
+    ctx.strokeStyle = hexA('#ffffff', a); ctx.lineWidth = 2; ctx.stroke();
+    return true;
+  });
+  if (world.word.length) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const p of world.word) {
+      const f = clamp((now - p.t0 - p.delay) / 1100, 0, 1), e = 1 - Math.pow(1 - f, 3);
+      const x = p.x + (p.tx - p.x) * e + (f >= 1 ? Math.sin(now / 400 + p.tx) * .6 : 0);
+      const y = p.y + (p.ty - p.y) * e + (f >= 1 ? Math.cos(now / 500 + p.ty) * .6 : 0);
+      ctx.fillStyle = hexA(p.color, .25); ctx.fillRect(x - p.s, y - p.s, p.s * 3, p.s * 3);
+      ctx.fillStyle = p.color; ctx.fillRect(x, y, p.s * 1.1, p.s * 1.1);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ===================== HUD ===================== */
+const $ = id => document.getElementById(id);
+const panel = $('panel'), logList = $('logList');
+let logN = 0, invShown = [];
+const ui = { odds: 0, oddsT: 0 };
+function setAct(act) {
+  document.documentElement.style.setProperty('--act', act.color);
+  world.actColor = act.color;
+  if (act.bg && act.bg !== world.bg) bgInit(act.bg);
+}
+function hud(s) {
+  ui.oddsT = s.odds;
+  $('fateMark').style.left = (50 + s.fate / 30 * 50) + '%';
+  $('fateVal').textContent = (s.fate > 0 ? '+' : '') + s.fate + (s.fate > 0 ? ' toward YES' : s.fate < 0 ? ' toward NO' : ' (balanced)') + (s.combo >= 3 ? ` · combo ×${s.combo}` : '');
+  $('chaosFill').style.width = s.chaos + '%';
+  $('chaosVal').textContent = Math.round(s.chaos) + ' / 100';
+  $('cEvents').textContent = s.events; $('cAnom').textContent = s.anomalies; $('cLoops').textContent = s.loops; $('cCombo').textContent = s.maxCombo;
+  $('cSplits').textContent = s.splits; $('cPortals').textContent = s.portals; $('cTwists').textContent = s.twists; $('cAch').textContent = s.achs.length;
+  $('cPoss').innerHTML = fmtBig(s.poss);
+  if (s.items.join() !== invShown.join()) {
+    $('inv').innerHTML = s.items.length ? s.items.map(id => `<span class="item${invShown.includes(id) ? '' : ' new'}" title="${esc(ITEMS[id][1])}">${esc(ITEMS[id][0])}</span>`).join('') : '<span class="empty">Empty pockets.</span>';
+    invShown = [...s.items];
+    $('invCount').textContent = s.items.length;
+  }
+}
+setInterval(() => {
+  if (Math.abs(ui.oddsT - ui.odds) < 0.005) { if (ui.odds !== ui.oddsT) { ui.odds = ui.oddsT; drawOdds(); } return; }
+  ui.odds += (ui.oddsT - ui.odds) * (reduced ? 1 : 0.25);
+  drawOdds();
+}, 50);
+function drawOdds() {
+  $('oddsVal').innerHTML = fmtOdds(ui.odds);
+  $('oddsNote').innerHTML = ui.odds < 0.3 ? 'Still plausible.' : `Rarer than <b>${rarer(ui.odds)}</b>.`;
+}
+function log(html, cls = '') {
+  const li = document.createElement('li');
+  if (cls) li.className = cls;
+  li.innerHTML = html;
+  logList.appendChild(li);
+  logN++; $('logCount').textContent = logN;
+  logList.scrollTop = logList.scrollHeight;
+}
+function chips(o, p) {
+  let c = '';
+  if (o[2] > 0) c += `<span class="chip y">+${o[2]} YES</span>`;
+  if (o[2] < 0) c += `<span class="chip n">${o[2]} NO</span>`;
+  if (o[3] > 0) c += `<span class="chip c">+${o[3]} chaos</span>`;
+  if (o[3] < 0) c += `<span class="chip c">${o[3]} chaos</span>`;
+  for (const s of (o[4] || '').split(' ').filter(Boolean)) {
+    if (s === 'loop') c += '<span class="chip s">↺ time loop</span>';
+    else if (s === 'split') c += '<span class="chip s">⑂ splits timeline</span>';
+    else if (s === 'portal') c += '<span class="chip s">◎ portal</span>';
+    else if (s === 'twist') c += '<span class="chip s">⟲ plot twist</span>';
+    else if (s === 'snap') c += '<span class="chip s">✧ snap</span>';
+    else if (s === 'retcon') c += '<span class="chip s">◀◀ retcon</span>';
+    else if (s.startsWith('item:')) c += `<span class="chip i">+ ${esc(ITEMS[s.slice(5)][0])}</span>`;
+    else if (s.startsWith('boss:')) c += '<span class="chip n">☠ chooses your boss</span>';
+    else if (s[0] === '>') c += '<span class="chip s">→ consequence</span>';
+  }
+  if (p < 0.05) c += `<span class="chip rare">anomaly · ${oneIn(p)}</span>`;
+  return c;
+}
+function stripHTML(p, label) {
+  return `<div class="stripwrap">${label ? `<div class="slabel">${label}</div>` : ''}<div class="strip">${p.map((x, i) => `<div class="seg ${x < 0.05 ? 'r' : i % 2 ? 'b' : 'a'}" style="width:${(x * 100).toFixed(3)}%"></div>`).join('')}</div><div class="cursor"></div></div>`;
+}
+function optsHTML(ev, p, pB) {
+  return `<ul class="opts">${ev.o.map((o, i) => `<li><span class="ol">${esc(o[0])}</span><span class="op">${pB ? `A ${pct(p[i])} · B ${pct(pB[i])}` : pct(p[i])}</span><span class="chips">${chips(o, Math.min(p[i], pB ? pB[i] : 1))}</span></li>`).join('')}</ul>`;
+}
+function meta(act, right) { return `<div class="pmeta"><span class="actname">Act ${act.id} · ${esc(act.name)}</span><span>${right}</span></div>`; }
+
+/* ===================== FX ===================== */
+const run = { skip: false, speed: 1, active: false };
+const wait = ms => run.skip || ms <= 0 ? Promise.resolve() : new Promise(r => setTimeout(r, ms * run.speed));
+async function type(el, text) {
+  if (run.skip || reduced) { el.textContent = text; return; }
+  el.textContent = '';
+  for (let i = 0; i < text.length; i++) { if (run.skip) { el.textContent = text; return; } el.textContent += text[i]; if (i % 3 === 2) await new Promise(r => setTimeout(r, 14 * run.speed)); }
+}
+function spin(wrap, p, pick, dur) {
+  const cur = wrap.querySelector('.cursor'), segs = [...wrap.querySelectorAll('.seg')];
+  const cum = []; p.reduce((a, x, i) => (cum[i] = a, a + x), 0);
+  const target = cum[pick] + p[pick] * (0.15 + Math.random() * 0.7);
+  const finish = () => { cur.style.left = (target * 100) + '%'; segs.forEach((s, i) => { s.classList.remove('hot'); s.classList.toggle('won', i === pick); }); };
+  if (run.skip || reduced) { finish(); return Promise.resolve(); }
+  const laps = 2 + Math.floor(dur / 900), total = laps + target, D = dur * run.speed, t0 = performance.now();
+  return new Promise(res => {
+    (function tick(now) {
+      if (run.skip) { finish(); return res(); }
+      const t = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - t, 4);
+      const pos = (e * total) % 1;
+      cur.style.left = (pos * 100) + '%';
+      let hot = 0; while (hot < p.length - 1 && pos >= cum[hot] + p[hot]) hot++;
+      segs.forEach((s, i) => s.classList.toggle('hot', i === hot));
+      if (t < 1) requestAnimationFrame(tick); else { finish(); res(); }
+    })(performance.now());
+  });
+}
+function retrigger(el, cls) { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
+function glitch() { if (reduced || run.skip) return; retrigger(document.body, 'glitch'); setTimeout(() => document.body.classList.remove('glitch'), 520); }
+function flash() { if (reduced || run.skip) return; retrigger($('flash'), 'go'); }
+function pop(text, color) {
+  if (run.skip) return;
+  const el = $('pop'); el.textContent = text; el.style.color = color;
+  el.getAnimations().forEach(a => a.cancel());
+  if (reduced) { el.style.opacity = 1; setTimeout(() => el.style.opacity = 0, 1000); return; }
+  el.animate([{ opacity: 0, transform: 'translate(-50%,-50%) scale(.3) rotate(-8deg)' }, { opacity: 1, transform: 'translate(-50%,-50%) scale(1.15) rotate(2deg)', offset: .2 }, { opacity: 1, transform: 'translate(-50%,-50%) scale(1) rotate(0)', offset: .7 }, { opacity: 0, transform: 'translate(-50%,-60%) scale(1.05)' }], { duration: 1500, easing: 'ease-out', fill: 'forwards' });
+}
+function toast(kind, label, title, desc, ic) {
+  if (run.skip) return;
+  const el = document.createElement('div');
+  el.className = 'toast ' + kind;
+  el.innerHTML = `<div class="ic">${ic}</div><div><small>${esc(label)}</small><b>${esc(title)}</b><span>${esc(desc)}</span></div>`;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 450); }, 3200);
+}
+function shockwave(x, y, col, n) { for (let i = 0; i < n; i++) setTimeout(() => ring(x, y, col, true), i * 160 * run.speed); }
+
+/* ===================== PLAYBACK ===================== */
+async function play(question, sample) {
+  run.active = true; run.skip = !!sample;
+  run.speed = parseFloat($('speed').value);
+  $('run').disabled = true; $('skip').disabled = !!sample;
+  $('verdict').hidden = true; $('reopen').hidden = true; $('toasts').innerHTML = '';
+  Object.assign(world, { edges: [], sparks: [], parts: [], rings: [], bolts: [], beams: [], floaters: [], word: [], wordInfo: null, fight: null, manual: false, camX: 0, camY: -H * 0.4, tCamX: 0, tCamY: -H * 0.4 });
+  world.heads = [{ x: 0, y: 0 }];
+  logList.innerHTML = ''; logN = 0; invShown = [];
+  const seed = Math.floor(Math.random() * 2 ** 31);
+  const { steps } = simulate(seed);
+  hud({ fate: 0, chaos: 8, odds: 0, poss: 0, anomalies: 0, loops: 0, splits: 0, portals: 0, twists: 0, events: 0, combo: 0, maxCombo: 0, items: [], achs: [] });
+  ui.odds = 0; drawOdds();
+  log(`Question: <b>${esc(question || 'unspoken')}</b> · seed ${seed}`, 'sys');
+  let evNum = 0, splitHeads = null, curAct = ACTS[0];
+
+  for (const st of steps) {
+    const inst = run.skip;
+    if (st.act) curAct = st.act;
+    switch (st.type) {
+    case 'act': {
+      setAct(st.act);
+      log(`Act ${st.act.id}: ${esc(st.act.name)}`, 'sys');
+      if (!inst) {
+        $('actNum').textContent = st.act.id === 'VIII' ? 'Final act' : `Act ${st.act.id} of VIII`; $('actName').textContent = st.act.name; $('actSub').textContent = st.act.sub;
+        $('actcard').classList.add('show'); flash(); glitch();
+        if (st.act.bg === 'boss') { world.shake = 20; const h = world.heads[0]; bolt(h.x, h.y, '#ff3b4e'); }
+        await wait(1700);
+        $('actcard').classList.remove('show');
+        await wait(250);
+      }
+      break;
+    }
+    case 'event': {
+      evNum++;
+      const { ev, r, act } = st;
+      const tag = st.looped ? 'Looped event' : st.cons ? 'Consequence' : `Event ${evNum}`;
+      panel.innerHTML = `${meta(act, tag)}${st.cons ? '<div class="banner conseq">Direct consequence of the last outcome</div>' : ''}<h2></h2>${stripHTML(r.p)}${optsHTML(ev, r.p)}`;
+      await type(panel.querySelector('h2'), ev.t);
+      const edges = branch(world.heads[0], ev.o.length, act.color, run.skip);
+      await wait(200);
+      await spin(panel.querySelector('.stripwrap'), r.p, r.i, 1100 + (r.rare ? 900 : 0));
+      panel.querySelectorAll('.opts li').forEach((li, i) => li.classList.add(i === r.i ? 'won' : 'lost'));
+      const nh = settle(edges, r.i, run.skip, r.rare);
+      st._edge = nh.edge; st._x = nh.x; st._y = nh.y;
+      spark(nh.edge, 700 * run.speed, act.color);
+      world.heads = [{ x: nh.x, y: nh.y }];
+      hud(r.snap);
+      if (r.rare) {
+        ring(nh.x, nh.y, '#ff5dd2', true); burst(nh.x, nh.y, '#ff5dd2', 110, 7); bolt(nh.x, nh.y, '#ff5dd2');
+        if (!run.skip) { world.shake = 18; glitch(); flash(); pop(oneIn(r.p[r.i]), '#ff5dd2'); }
+      } else ring(nh.x, nh.y, act.color, false);
+      if (r.combo >= 3 && r.bonus) { pop(`Combo ×${r.combo}`, r.bonus > 0 ? '#4fe3a1' : '#ff5d6c'); burst(nh.x, nh.y, r.bonus > 0 ? '#4fe3a1' : '#ff5d6c', 50, 4); }
+      log(`<span class="n">#${String(r.snap.events).padStart(2, '0')}</span>${esc(ev.t)} → <b>${esc(r.o[0])}</b> <span class="p">${r.rare ? oneIn(r.p[r.i]) : pct(r.p[r.i])}</span>${r.bonus ? ` <span class="p">combo ${r.bonus > 0 ? '+' : ''}${r.bonus}</span>` : ''}`, r.rare ? 'rare' : '');
+      await wait(r.rare ? 1200 : 550);
+      break;
+    }
+    case 'item': {
+      const [nm, desc] = ITEMS[st.id];
+      hud(st.snap);
+      toast('item', 'Item get', nm, desc, '+');
+      const h = world.heads[0]; burst(h.x, h.y, '#b48cff', 60, 4); floater(h.x, h.y - 20, '+ ' + nm, '#d9c6ff');
+      log(`+ Item: ${esc(nm)}`, 'sys itm');
+      await wait(500);
+      break;
+    }
+    case 'ach': {
+      const [nm, desc] = ACH[st.id];
+      toast('', 'Achievement unlocked', nm, desc, '★');
+      log(`★ Achievement: ${esc(nm)}`, 'sys ach');
+      $('cAch').textContent = Number($('cAch').textContent) + 1;
+      break;
+    }
+    case 'bossmark': {
+      const b = BOSSES[st.id];
+      toast('boss', 'Your final boss has been chosen', b.name, 'It will be waiting at the end.', '☠');
+      log(`☠ Boss chosen: ${esc(b.name)}`, 'sys boss');
+      break;
+    }
+    case 'loop': {
+      panel.innerHTML = `${meta(curAct, 'Anomaly')}<div class="banner loop">↺ Time loop</div><h2>Time folds back. The same moment happens again, and it may not go the same way.</h2>`;
+      const h = world.heads[0], R = 34, pts = [];
+      for (let i = 0; i <= 28; i++) { const a = i / 28 * 6.283; pts.push([h.x + R * Math.sin(a), h.y - R + R * Math.cos(a)]); }
+      const e = addEdge(pts, '#ffd36b', { kind: 'loop', width: 2.4, instant: inst });
+      spark(e, 900 * run.speed, '#ffd36b'); spark(e, 1300 * run.speed, '#ffd36b');
+      hud(st.snap); glitch(); pop('Loop', '#ffd36b');
+      log('↺ Time loop: the event repeats', 'sys loop');
+      await wait(1200);
+      break;
+    }
+    case 'portal': {
+      const h = world.heads[0];
+      panel.innerHTML = `${meta(curAct, 'Anomaly')}<div class="banner portal">◎ Portal</div><h2>Reality tears open. The rest of this act is skipped entirely.</h2>`;
+      shockwave(h.x, h.y, '#c39bff', 5); burst(h.x, h.y, '#c39bff', 160, 8);
+      const ny = h.y + STEP_Y * 1.6, nx = h.x * 0.3;
+      const e = addEdge(bez(h.x, h.y, nx, ny, 24), '#c39bff', { kind: 'main', width: 3, instant: inst });
+      spark(e, 900 * run.speed, '#c39bff');
+      world.heads = [{ x: nx, y: ny }];
+      hud(st.snap);
+      if (!inst) { world.shake = 24; flash(); glitch(); pop('Portal', '#c39bff'); }
+      log('◎ Portal: the rest of the act is skipped', 'sys portal');
+      await wait(1400);
+      break;
+    }
+    case 'twist': {
+      panel.innerHTML = `${meta(curAct, 'Plot twist')}<div class="banner twist">⟲ Plot twist</div><h2>Everything you thought was YES was actually NO, and vice versa. Fate flips to ${st.snap.fate > 0 ? '+' : ''}${st.snap.fate}.</h2>`;
+      if (!inst && !reduced) { retrigger(document.body, 'twist'); setTimeout(() => document.body.classList.remove('twist'), 1700); }
+      pop('Plot twist', '#ff9a3d');
+      const h = world.heads[0]; shockwave(h.x, h.y, '#ff9a3d', 3);
+      hud(st.snap);
+      log('⟲ Plot twist: fate inverted', 'sys twist');
+      await wait(1900);
+      break;
+    }
+    case 'snap': {
+      panel.innerHTML = `${meta(curAct, 'Snap')}<div class="banner snap">✧ Snap</div><h2>Perfectly balanced. Half of everything that could have been turns to dust. Fate and chaos are halved.</h2>`;
+      pop('*snap*', '#e6cc95');
+      await wait(500);
+      const keep = [];
+      for (const e of world.edges) {
+        const dust = e.kind === 'main' ? Math.random() < .3 : Math.random() < .5;
+        if (!dust) { keep.push(e); continue; }
+        if (!reduced && !run.skip) for (let i = 0; i < e.pts.length * e.grow; i += 2) {
+          const p = e.pts[i];
+          world.parts.push({ x: p[0], y: p[1], vx: 1 + Math.random() * 2.5, vy: -.4 - Math.random() * 1.2, life: 1, decay: .006 + Math.random() * .01, color: '#c8a96a', size: 1.5 + Math.random() * 2, drag: .99 });
+        }
+      }
+      world.edges = keep;
+      hud(st.snap);
+      log('✧ Snap: half the tree is dust', 'sys snap');
+      await wait(1600);
+      break;
+    }
+    case 'retcon': {
+      const t = st.target;
+      const why = st.why === 'flux' ? 'The Flux Capacitor kicks in. Before the boss, you go back and fix your worst moment.' : 'History is being rewritten.';
+      if (!t) {
+        panel.innerHTML = `${meta(curAct, 'Retcon')}<div class="banner retcon">◀◀ Retcon</div><h2>${why} Nothing has gone wrong yet, so there is nothing to fix.</h2>`;
+        log('◀◀ Retcon: nothing to fix', 'sys retcon');
+        await wait(1200);
+        break;
+      }
+      panel.innerHTML = `${meta(curAct, 'Retcon')}<div class="banner retcon">◀◀ Retcon</div><h2>${why} “${esc(t.ev.t)} → ${esc(t.r.o[0])}” never happened. Fate swings by +${-2 * st.delta}.</h2>`;
+      if (!run.skip) $('vhs').classList.add('on');
+      if (!run.skip && t._y !== undefined) { world.manual = true; world.tCamY = t._y - H * 0.4; world.tCamX = -t._x * .85; }
+      await wait(1300);
+      if (t._edge) { t._edge.color = '#ffd36b'; t._edge.kind = 'gold'; t._edge.width = 3.4; burst(t._x, t._y, '#ffd36b', 90, 5); ring(t._x, t._y, '#ffd36b', true); }
+      hud(st.snap);
+      await wait(900);
+      $('vhs').classList.remove('on');
+      world.manual = false;
+      pop('Great Scott!', '#ffd36b');
+      log(`◀◀ Retcon: “${esc(t.r.o[0])}” erased (fate +${-2 * st.delta})`, 'sys retcon');
+      await wait(900);
+      break;
+    }
+    case 'split': {
+      const h = world.heads[0], sx = spreadX();
+      const ax = clamp(h.x - 120, -sx, sx), bx = clamp(h.x + 120, -sx, sx);
+      const ea = addEdge(bez(h.x, h.y, ax, h.y + STEP_Y * .8), '#7cc8ff', { kind: 'main', width: 2.6, instant: inst });
+      const eb = addEdge(bez(h.x, h.y, bx, h.y + STEP_Y * .8), '#7cc8ff', { kind: 'main', width: 2.6, instant: inst });
+      spark(ea, 800 * run.speed, '#7cc8ff'); spark(eb, 800 * run.speed, '#7cc8ff');
+      world.heads = [{ x: ax, y: h.y + STEP_Y * .8, tl: 'A' }, { x: bx, y: h.y + STEP_Y * .8, tl: 'B' }];
+      splitHeads = { A: [ea], B: [eb] };
+      panel.innerHTML = `${meta(curAct, 'Anomaly')}<div class="banner split">⑂ Timeline split</div><h2>Reality splits in two. Both timelines play out the next events independently, then only one survives.</h2>`;
+      hud(st.snap); burst(h.x, h.y, '#7cc8ff', 100, 6); bolt(h.x, h.y, '#7cc8ff');
+      if (!inst) { world.shake = 12; flash(); pop('Split', '#7cc8ff'); }
+      log('⑂ Timeline split into A and B', 'sys split');
+      await wait(1400);
+      break;
+    }
+    case 'split-event': {
+      evNum++;
+      const { ev, a, b, act } = st;
+      panel.innerHTML = `${meta(act, `Event ${evNum} · both timelines`)}<h2></h2>${stripHTML(a.p, 'Timeline A')}${stripHTML(b.p, 'Timeline B')}${optsHTML(ev, a.p, b.p)}`;
+      await type(panel.querySelector('h2'), ev.t);
+      const [hA, hB] = world.heads;
+      const eA = branch(hA, ev.o.length, act.color, run.skip), eB = branch(hB, ev.o.length, act.color, run.skip);
+      await wait(200);
+      const wraps = panel.querySelectorAll('.stripwrap');
+      await Promise.all([spin(wraps[0], a.p, a.i, 1200), spin(wraps[1], b.p, b.i, 1600)]);
+      panel.querySelectorAll('.opts li').forEach((li, i) => {
+        const marks = (i === a.i ? 'A' : '') + (i === b.i ? 'B' : '');
+        if (marks) { li.classList.add('won'); li.querySelector('.ol').insertAdjacentHTML('beforeend', `<span class="mk">← ${marks.split('').join(' & ')}</span>`); } else li.classList.add('lost');
+      });
+      const nA = settle(eA, a.i, run.skip, a.rare), nB = settle(eB, b.i, run.skip, b.rare);
+      splitHeads.A.push(nA.edge); splitHeads.B.push(nB.edge);
+      spark(nA.edge, 700 * run.speed, act.color); spark(nB.edge, 700 * run.speed, act.color);
+      world.heads = [{ x: nA.x, y: nA.y, tl: 'A' }, { x: nB.x, y: nB.y, tl: 'B' }];
+      [[a, nA], [b, nB]].forEach(([r, n]) => { if (r.rare) { ring(n.x, n.y, '#ff5dd2', true); burst(n.x, n.y, '#ff5dd2', 60, 5); bolt(n.x, n.y, '#ff5dd2'); } else ring(n.x, n.y, act.color); });
+      if ((a.rare || b.rare) && !run.skip) { world.shake = 14; glitch(); }
+      log(`<span class="tl">A</span>${esc(ev.t)} → <b>${esc(a.o[0])}</b> <span class="p">${a.rare ? oneIn(a.p[a.i]) : pct(a.p[a.i])}</span>`, a.rare ? 'rare' : '');
+      log(`<span class="tl">B</span>${esc(ev.t)} → <b>${esc(b.o[0])}</b> <span class="p">${b.rare ? oneIn(b.p[b.i]) : pct(b.p[b.i])}</span>`, b.rare ? 'rare' : '');
+      $('fateMark').style.left = (50 + ((a.snap.fate + b.snap.fate) / 2) / 30 * 50) + '%';
+      $('fateVal').textContent = `A ${a.snap.fate > 0 ? '+' : ''}${a.snap.fate} · B ${b.snap.fate > 0 ? '+' : ''}${b.snap.fate}`;
+      await wait(800);
+      break;
+    }
+    case 'collapse': {
+      const keep = st.keepA ? 'A' : 'B', lose = st.keepA ? 'B' : 'A';
+      const dead = world.heads.find(h => h.tl === lose) || world.heads[0], alive = world.heads.find(h => h.tl === keep) || world.heads[0];
+      if (splitHeads) splitHeads[lose].forEach(e => { e.kind = 'dead'; e.alphaT = .35; });
+      shockwave(dead.x, dead.y, '#ff5d6c', 3); burst(dead.x, dead.y, '#ff5d6c', 180, 7); bolt(dead.x, dead.y, '#ff5d6c');
+      panel.innerHTML = `${meta(curAct, 'Anomaly')}<div class="banner collapse">✕ Timeline ${lose} collapses</div><h2>Only one timeline can exist. Timeline ${keep} survives with a ${pct(st.keepA ? st.pA : 1 - st.pA)} chance, and its fate becomes yours.</h2>`;
+      world.heads = [{ x: alive.x, y: alive.y }];
+      hud(st.snap);
+      if (!inst) { world.shake = 20; flash(); glitch(); pop(`${lose} deleted`, '#ff5d6c'); }
+      log(`✕ Timeline ${lose} collapses, ${keep} survives (${pct(st.keepA ? st.pA : 1 - st.pA)})`, 'sys collapse');
+      await wait(1500);
+      break;
+    }
+    case 'boss-intro': {
+      const h = world.heads[0], fy = h.y + 110;
+      const ey = addEdge(bez(h.x, h.y, h.x - 110, fy), '#4fe3a1', { kind: 'main', width: 2.6, instant: inst });
+      const eb = addEdge(bez(h.x, h.y, h.x + 110, fy), '#ff3b4e', { kind: 'main', width: 2.6, instant: inst });
+      spark(ey, 700 * run.speed, '#4fe3a1'); spark(eb, 700 * run.speed, '#ff3b4e');
+      world.fight = { you: { x: h.x - 110, y: fy, hp: st.youMax, max: st.youMax, label: 'YOU', scale: inst ? 1 : 0.05 }, boss: { x: h.x + 110, y: fy, hp: st.bossMax, max: st.bossMax, label: 'BOSS', scale: inst ? 1 : 0.05 }, cx: h.x, cy: fy };
+      world.heads = [{ x: h.x, y: fy }];
+      panel.innerHTML = `${meta(BOSS_ACT, st.chosen ? 'Chosen by your choices' : 'Randomly assigned')}<div class="banner boss">☠ Boss fight</div><h2></h2><p class="btitle">${esc(st.boss.title)}</p>
+        <div class="hp">
+          <div class="hprow"><span>You</span><div class="hpbar you"><i id="hpYouG"></i><b id="hpYou"></b></div><span id="hpYouT">${st.youMax}/${st.youMax}</span></div>
+          <div class="hprow"><span>Boss</span><div class="hpbar boss"><i id="hpBossG"></i><b id="hpBoss"></b></div><span id="hpBossT">${st.bossMax}/${st.bossMax}</span></div>
+        </div><div class="moveline" id="moveline"><small>Your max HP comes from fate. The boss’s comes from chaos. ${st.items.length ? 'Items in play: ' + st.items.map(i => esc(ITEMS[i][0])).join(', ') + '.' : 'You have no items.'}</small></div>`;
+      panel.dataset.youMax = st.youMax; panel.dataset.bossMax = st.bossMax;
+      await type(panel.querySelector('h2'), st.boss.name);
+      burst(h.x + 110, fy, '#ff3b4e', 120, 6); bolt(h.x + 110, fy, '#ff3b4e');
+      if (!run.skip) { world.shake = 16; pop('Fight!', '#ff3b4e'); }
+      log(`☠ Boss fight vs ${esc(st.boss.name)}`, 'sys boss');
+      await wait(1800);
+      break;
+    }
+    case 'boss-ball': case 'boss-hit': case 'boss-gauntlet': case 'boss-shell': case 'boss-revive': {
+      const F = world.fight, ml = $('moveline');
+      const setHP = () => {
+        const ym = +panel.dataset.youMax, bm = +panel.dataset.bossMax;
+        F.you.hp = st.you; F.boss.hp = st.bh;
+        $('hpYou').style.width = (st.you / ym * 100) + '%'; $('hpYouG').style.width = (st.you / ym * 100) + '%';
+        $('hpBoss').style.width = (st.bh / bm * 100) + '%'; $('hpBossG').style.width = (st.bh / bm * 100) + '%';
+        $('hpYouT').textContent = `${st.you}/${ym}`; $('hpBossT').textContent = `${st.bh}/${bm}`;
+      };
+      if (st.type === 'boss-ball') {
+        ml.innerHTML = `<span class="who-you">You throw the Poké Ball…</span>`;
+        beam(F.you, F.boss, '#ff5d6c', false);
+        for (let i = 0; i < 3; i++) { await wait(380); floater(F.boss.x, F.boss.y - 30, '…', '#ffffff'); F.boss.hitT = performance.now(); }
+        await wait(300);
+        if (st.caught) { F.boss.dead = true; burst(F.boss.x, F.boss.y, '#ffffff', 160, 7); ml.innerHTML = `<span class="crit">Gotcha! The boss was caught.</span><small>A 15% chance. The fight is over before it began.</small>`; pop('Gotcha!', '#ffe27a'); log('Poké Ball: the boss was caught', 'sys boss'); }
+        else { ml.innerHTML = `<span class="who-boss">The boss breaks free.</span><small>It was a 15% chance.</small>`; log('Poké Ball: the boss broke free', 'sys boss'); }
+        setHP(); await wait(900); break;
+      }
+      if (st.type === 'boss-gauntlet') {
+        ml.innerHTML = `<span class="who-you">You snap with the Slightly Used Gauntlet!</span><small>The boss loses half its HP: −${st.dmg}</small>`;
+        pop('*snap*', '#e6cc95'); F.boss.hitT = performance.now(); burst(F.boss.x, F.boss.y, '#c8a96a', 140, 5); floater(F.boss.x, F.boss.y - 20, `−${st.dmg}`, '#e6cc95', true);
+        if (!run.skip) world.shake = 16;
+        setHP(); log(`Gauntlet snap: boss −${st.dmg}`, 'sys boss'); await wait(1200); break;
+      }
+      if (st.type === 'boss-shell') {
+        const tgt = st.hitYou ? F.you : F.boss;
+        ml.innerHTML = `<span class="${st.hitYou ? 'who-boss' : 'who-you'}">A Blue Shell hunts down whoever is winning…</span><small>${st.hitYou ? 'That’s you. −30.' : 'It hits the boss. −30.'}</small>`;
+        bolt(tgt.x, tgt.y, '#52d4ff'); ring(tgt.x, tgt.y, '#52d4ff', true); burst(tgt.x, tgt.y, '#52d4ff', 120, 6); floater(tgt.x, tgt.y - 20, '−30', '#52d4ff', true); tgt.hitT = performance.now();
+        if (!run.skip) { world.shake = 18; pop('Blue Shell', '#52d4ff'); }
+        setHP(); log(`Blue Shell hits ${st.hitYou ? 'you' : 'the boss'} for 30`, 'sys boss'); await wait(1300); break;
+      }
+      if (st.type === 'boss-revive') {
+        ml.innerHTML = `<span class="crit">The Totem of Undying shatters. You’re back with 30 HP.</span>`;
+        F.you.dead = false; F.you.scale = Math.max(F.you.scale, .05); burst(F.you.x, F.you.y, '#ffd36b', 160, 6); shockwave(F.you.x, F.you.y, '#ffd36b', 3);
+        pop('Revived', '#ffd36b');
+        setHP(); log('Totem of Undying: revived at 30 HP', 'sys boss'); await wait(1300); break;
+      }
+      const youAtt = st.att === 'you', A = youAtt ? F.you : F.boss, T = youAtt ? F.boss : F.you;
+      const col = youAtt ? '#4fe3a1' : '#ff3b4e';
+      const who = youAtt ? '<span class="who-you">You</span>' : '<span class="who-boss">The boss</span>';
+      if (st.kind === 'ring') {
+        ml.innerHTML = `${who} uses <b>${esc(st.move)}</b>…<small>…but you’re invisible thanks to the Suspicious Gold Ring. Miss!</small>`;
+        floater(T.x, T.y - 20, 'MISS', '#d9c6ff');
+      } else if (st.kind === 'miss') {
+        ml.innerHTML = `${who} uses <b>${esc(st.move)}</b>…<small>It misses completely.</small>`;
+        beam(A, { x: T.x + (Math.random() - .5) * 80, y: T.y - 60 }, col, false); floater(T.x, T.y - 20, 'MISS', '#8a93ad');
+      } else {
+        const crit = st.kind === 'crit';
+        ml.innerHTML = `${who} uses <b>${esc(st.move)}</b>${crit ? ' <span class="crit">CRITICAL HIT!</span>' : ''}<small>−${st.dmg} HP · round ${st.round}</small>`;
+        beam(A, T, col, crit); T.hitT = performance.now();
+        burst(T.x, T.y, crit ? '#ffe27a' : col, crit ? 90 : 40, crit ? 6 : 4);
+        floater(T.x + (Math.random() - .5) * 30, T.y - 24, `−${st.dmg}`, crit ? '#ffe27a' : '#ffffff', crit);
+        if (crit) { bolt(T.x, T.y, '#ffe27a'); if (!run.skip) { world.shake = 16; flash(); } } else if (!run.skip) world.shake = 5;
+      }
+      setHP();
+      if (st.you <= 0) F.you.dead = true;
+      if (st.bh <= 0) F.boss.dead = true;
+      if (st.kind === 'crit' || st.round % 4 === 1) log(`R${st.round}: ${youAtt ? 'You' : 'Boss'} · ${esc(st.move)} ${st.kind === 'crit' ? '(crit) ' : ''}${st.dmg ? '−' + st.dmg : 'miss'}`, 'boss');
+      await wait(st.kind === 'crit' ? 950 : 700);
+      break;
+    }
+    case 'boss-end': {
+      const F = world.fight;
+      const L = st.won ? F.boss : F.you, Wn = st.won ? F.you : F.boss;
+      L.dead = true;
+      shockwave(L.x, L.y, st.won ? '#ff3b4e' : '#4fe3a1', 4); burst(L.x, L.y, st.won ? '#ff3b4e' : '#4fe3a1', 260, 9); bolt(L.x, L.y, '#ffffff');
+      if (!run.skip) { world.shake = 30; flash(); glitch(); pop('K.O.', st.won ? '#4fe3a1' : '#ff3b4e'); }
+      $('moveline').innerHTML = st.won ? `<span class="who-you">You defeated ${esc(st.boss.name)}.</span><small>Fate +8 toward YES.</small>` : `<span class="who-boss">${esc(st.boss.name)} wins.</span><small>Fate −8 toward NO.</small>`;
+      hud(st.snap);
+      log(st.won ? `☠ You win the boss fight (fate +8)` : `☠ The boss wins (fate −8)`, 'sys boss');
+      await wait(1600);
+      const ny = F.cy + 90;
+      const e = addEdge(bez(Wn.x, Wn.y, F.cx, ny), st.won ? '#4fe3a1' : '#ff3b4e', { kind: 'main', width: 3, instant: run.skip });
+      spark(e, 700 * run.speed, '#ffffff');
+      world.heads = [{ x: F.cx, y: ny }];
+      if (run.skip) world.fight = null; else setTimeout(() => { if (world.fight === F) world.fight = null; }, 1500);
+      await wait(600);
+      break;
+    }
+    case 'final': {
+      setAct({ color: '#f2f5ff', bg: 'stars' });
+      if (!run.skip) {
+        $('actNum').textContent = 'The end of all paths'; $('actName').textContent = 'The Final Coin'; $('actSub').textContent = `YES odds: ${pct(st.pYes)}`;
+        $('actcard').classList.add('show'); flash();
+        await wait(1600); $('actcard').classList.remove('show'); await wait(200);
+      }
+      panel.innerHTML = `<div class="pmeta"><span class="actname">Final fork</span><span>The last event</span></div>
+        <h2>Every path converges on one coin. Fate sets the odds.</h2>
+        <div class="coinstage"><div class="coin" id="coin"><div class="face fy">YES</div><div class="face fn">NO</div></div></div>
+        <div class="pyes">YES ${pct(st.pYes)}${st.bonusYes ? ` (items +${(st.bonusYes * 100).toFixed(1)}%)` : ''} · NO ${pct(1 - st.pYes)} · edge ${pct(st.edgeP)}</div><div class="minicoins" id="minis"></div>`;
+      const h = world.heads[0];
+      const fe = branch(h, 2, '#f2f5ff', run.skip);
+      const coin = $('coin');
+      const land = st.edge ? 90 : (st.yes ? 0 : 180);
+      if (!run.skip && !reduced) {
+        coin.animate([{ transform: 'translateY(0) rotateY(0deg)' }, { transform: 'translateY(-60px) rotateY(1440deg)', offset: .45 }, { transform: `translateY(0) rotateY(${2160 + land}deg)` }], { duration: 2600 * run.speed, easing: 'cubic-bezier(.3,.1,.3,1)', fill: 'forwards' });
+        await wait(2600);
+      }
+      coin.getAnimations().forEach(a => a.cancel());
+      coin.style.transform = `rotateY(${land}deg)`;
+      if (st.edge) {
+        if (!run.skip) { world.shake = 26; glitch(); flash(); pop('Edge!', '#ffe27a'); }
+        panel.querySelector('h2').textContent = 'The coin landed on its EDGE. Sudden death: best of three.';
+        log('The Final Coin lands on its edge. Sudden death.', 'sys');
+        for (let i = 0; i < 3; i++) {
+          await wait(700);
+          const sp = document.createElement('span'); sp.className = st.flips[i] ? 'y' : 'n'; sp.textContent = st.flips[i] ? 'YES' : 'NO';
+          $('minis').appendChild(sp); burst(h.x, h.y, st.flips[i] ? '#4fe3a1' : '#ff5d6c', 40, 3);
+          log(`Sudden death flip ${i + 1}: ${st.flips[i] ? 'YES' : 'NO'}`, 'sys');
+        }
+        await wait(600);
+      }
+      const col = st.yes ? '#4fe3a1' : '#ff5d6c';
+      fe[st.yes ? 0 : 1].color = col;
+      const nh = settle(fe, st.yes ? 0 : 1, run.skip, false);
+      world.heads = [{ x: nh.x, y: nh.y }];
+      hud(st.snap);
+      setAct({ color: col });
+      shockwave(nh.x, nh.y, col, 5); burst(nh.x, nh.y, col, 400, 10);
+      if (!run.skip && !reduced) {
+        for (let i = 0; i < 4; i++) setTimeout(() => bolt(nh.x + (Math.random() - .5) * 200, nh.y, col), i * 120);
+        for (let i = 0; i < 6; i++) setTimeout(() => {
+          const fx = nh.x + (Math.random() - .5) * W * .7, fy = nh.y - 80 - Math.random() * H * .4;
+          for (let j = 0; j < 70; j++) { const a = Math.random() * 6.283, v = 1 + Math.random() * 4; world.parts.push({ x: fx, y: fy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, decay: .01 + Math.random() * .01, color: [col, '#ffffff', '#ffe27a'][j % 3], size: 2, g: .04, drag: .98 }); }
+        }, 300 + i * 260);
+        world.shake = 30; flash();
+      }
+      log(`VERDICT: ${st.yes ? 'YES' : 'NO'}`, st.yes ? 'verdict-yes' : 'verdict-no');
+      const instWord = run.skip;
+      try { await document.fonts.load('900 100px Unbounded'); } catch (e) {}
+      formWord(st.yes ? 'YES' : 'NO', col, instWord);
+      showVerdict(question, st, steps, seed, sample);
+      break;
+    }
+    }
+  }
+  run.active = false; run.skip = false;
+  $('run').disabled = false; $('skip').disabled = true;
+}
+
+function showVerdict(question, fin, steps, seed, sample) {
+  const s = fin.snap;
+  const picks = [];
+  let bossName = '', bossWon = false;
+  steps.forEach(st => {
+    if (st.type === 'event') picks.push({ t: st.ev.t, l: st.r.o[0], p: st.r.p[st.r.i] });
+    if (st.type === 'split-event') { picks.push({ t: st.ev.t, l: st.a.o[0] + ' (A)', p: st.a.p[st.a.i] }); picks.push({ t: st.ev.t, l: st.b.o[0] + ' (B)', p: st.b.p[st.b.i] }); }
+    if (st.type === 'boss-end') { bossName = st.boss.name; bossWon = st.won; }
+  });
+  picks.sort((a, b) => a.p - b.p);
+  const v = $('verdict');
+  v.innerHTML = `<div class="vcard glass">
+    ${sample ? '<div class="sample">Example run · press Run for your own</div>' : ''}
+    <div class="vq">${esc(question || 'The question you didn’t type')}</div>
+    <div class="vword ${fin.yes ? 'y' : 'n'}">THE MACHINE SAYS ${fin.yes ? 'YES' : 'NO'}${fin.edge ? ' · decided in sudden death' : ''}</div>
+    <div class="rarer">This exact history was rarer than <b>${rarer(s.odds)}</b>.</div>
+    <div class="vgrid">
+      <div><span class="lbl">This exact history</span><b>${fmtOdds(s.odds)}</b></div>
+      <div><span class="lbl">Possible histories</span><b>${fmtBig(s.poss)}</b></div>
+      <div><span class="lbl">Events · anomalies</span><b>${s.events} · ${s.anomalies}</b></div>
+      <div><span class="lbl">Loops · splits · twists</span><b>${s.loops} · ${s.splits} · ${s.twists}</b></div>
+      <div><span class="lbl">Boss</span><b>${bossWon ? 'Defeated' : 'Lost to'}: ${esc(bossName)}</b></div>
+      <div><span class="lbl">Final fate</span><b>${s.fate > 0 ? '+' : ''}${s.fate} → YES ${pct(fin.pYes)}</b></div>
+    </div>
+    <h4>Least likely things that happened</h4>
+    <ol>${picks.slice(0, 3).map(p => `<li>${esc(p.t)} → <b>${esc(p.l)}</b> <span class="p">${oneIn(p.p)}</span></li>`).join('')}</ol>
+    ${s.items.length ? `<h4>Inventory</h4><div class="achs">${s.items.map(i => `<span class="it">${esc(ITEMS[i][0])}</span>`).join('')}</div>` : ''}
+    ${s.achs.length ? `<h4>Achievements · ${s.achs.length} of ${Object.keys(ACH).length}</h4><div class="achs">${s.achs.map(a => `<span>★ ${esc(ACH[a][0])}</span>`).join('')}</div>` : ''}
+    <div class="vbtns"><button class="run" id="again">Run again</button><button id="explore">Explore the tree</button></div>
+    <div class="lbl" style="margin-top:10px">seed ${seed}</div>
+  </div>`;
+  v.hidden = false;
+  $('again').onclick = () => { if (!run.active) play($('question').value.trim(), false); };
+  $('explore').onclick = () => { v.hidden = true; $('reopen').hidden = false; world.lastWord = world.wordInfo; world.word = []; world.wordInfo = null; };
+}
+
+/* ===================== BOOT ===================== */
+addEventListener('resize', resize);
+resize();
+requestAnimationFrame(frame);
+
+let drag = null;
+cv.addEventListener('pointerdown', e => { drag = { y: e.clientY, x: e.clientX, cy: world.tCamY, cx: world.tCamX }; world.manual = true; cv.classList.add('dragging'); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (!drag) return; world.tCamY = drag.cy - (e.clientY - drag.y); world.tCamX = drag.cx + (e.clientX - drag.x); });
+cv.addEventListener('pointerup', () => { drag = null; cv.classList.remove('dragging'); });
+cv.addEventListener('wheel', e => { world.manual = true; world.tCamY += e.deltaY; }, { passive: true });
+
+$('reopen').onclick = () => { $('verdict').hidden = false; $('reopen').hidden = true; if (world.lastWord) formWord(world.lastWord.word, world.lastWord.color, false); };
+$('form').addEventListener('submit', e => { e.preventDefault(); if (!run.active) play($('question').value.trim(), false); });
+$('skip').onclick = () => { run.skip = true; $('vhs').classList.remove('on'); world.manual = false; };
+$('logbtn').onclick = () => $('log').classList.toggle('open');
+
+play($('question').value.trim(), true);
+</script>
